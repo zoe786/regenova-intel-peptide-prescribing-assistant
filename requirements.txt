@@ -1,0 +1,43 @@
+# API framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.0
+
+# LLM / AI
+openai>=1.30.0
+tiktoken>=0.7.0
+langchain>=0.2.0
+langchain-openai>=0.1.8
+langchain-community>=0.2.0
+
+# Vector DB
+chromadb>=0.5.0
+
+# Graph
+networkx>=3.3
+
+# Biomedical data
+biopython>=1.83
+
+# Scraping / ingestion
+youtube-transcript-api>=0.6.2
+beautifulsoup4>=4.12.3
+requests>=2.31.0
+httpx>=0.27.0
+
+# Admin UI
+streamlit>=1.35.0
+
+# Testing
+pytest>=8.2.0
+pytest-asyncio>=0.23.7
+
+# Auth
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# Utilities
+rich>=13.7.1
+loguru>=0.7.2
