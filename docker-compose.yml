@@ -1,0 +1,72 @@
+version: "3.9"
+
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: regenova_chromadb
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  neo4j:
+    image: neo4j:5
+    container_name: regenova_neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    environment:
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-changeme}
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD:-changeme}", "RETURN 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: regenova_api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - CHROMA_PERSIST_DIR=/chroma/chroma
+      - VECTOR_DB_BACKEND=chroma
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # NOTE: For local dev, Adminer-style DB browsing is available at
+  # http://localhost:7474 (Neo4j Browser) once neo4j service is running.
+  # ChromaDB REST API is available at http://localhost:8001/api/v1/
+
+volumes:
+  chroma_data:
+  neo4j_data:
+  neo4j_logs:
