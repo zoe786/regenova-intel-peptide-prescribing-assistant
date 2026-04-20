@@ -34,8 +34,8 @@ def clean_html(text: str) -> str:
         return soup.get_text(separator=" ", strip=True)
     except ImportError:
         # Fallback: regex-based HTML stripping
-        text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<script[^>]*>.*?</\s*script\s*>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<style[^>]*>.*?</\s*style\s*>", " ", text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r"<[^>]+>", " ", text)
         # Decode common HTML entities
         text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
