@@ -94,9 +94,23 @@ class Settings(BaseSettings):
         default=False, description="Enable reconstitution guidance endpoint"
     )
 
+    # ── Audit ─────────────────────────────────────────────────────────────
+    audit_db_path: str = Field(
+        default="./data/audit.db", description="Path to SQLite audit database"
+    )
+
+    # ── Frontend ──────────────────────────────────────────────────────────
+    frontend_dir: str = Field(
+        default="./apps/frontend", description="Path to prescriber-facing static frontend"
+    )
+
     # ── CORS ──────────────────────────────────────────────────────────────
     cors_origins: list[str] = Field(
-        default=["http://localhost:8501", "http://localhost:3000"],
+        default=[
+            "http://localhost:8000",
+            "http://localhost:8501",
+            "http://localhost:3000",
+        ],
         description="Allowed CORS origins",
     )
 

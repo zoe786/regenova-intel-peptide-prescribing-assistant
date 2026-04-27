@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>REGENOVA-Intel | Peptide Prescribing Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --navy:        #0f172a;
+      --navy-light:  #1e293b;
+      --navy-mid:    #334155;
+      --emerald:     #10b981;
+      --emerald-dark:#059669;
+      --emerald-pale:#d1fae5;
+      --amber:       #f59e0b;
+      --amber-pale:  #fef3c7;
+      --red:         #ef4444;
+      --red-pale:    #fee2e2;
+      --slate:       #64748b;
+      --slate-light: #94a3b8;
+      --white:       #ffffff;
+      --bg:          #f8fafc;
+      --border:      #e2e8f0;
+      --shadow-sm:   0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+      --shadow-md:   0 4px 6px -1px rgba(0,0,0,.1), 0 2px 4px -2px rgba(0,0,0,.1);
+      --shadow-lg:   0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -4px rgba(0,0,0,.1);
+      --radius:      12px;
+      --radius-sm:   8px;
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--navy);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Disclaimer banner ───────────────────────────────────────────── */
+    .disclaimer-banner {
+      background: linear-gradient(135deg, var(--amber) 0%, #e0a00a 100%);
+      color: var(--navy);
+      text-align: center;
+      padding: .55rem 1rem;
+      font-size: .78rem;
+      font-weight: 600;
+      letter-spacing: .01em;
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+    }
+    .disclaimer-banner span { opacity: .8; font-weight: 400; margin-left: .4rem; }
+
+    /* ── Top nav ─────────────────────────────────────────────────────── */
+    header {
+      background: var(--navy);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      text-decoration: none;
+    }
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--emerald), var(--emerald-dark));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem;
+    }
+    .logo-text { line-height: 1; }
+    .logo-text strong { color: var(--white); font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
+    .logo-text small { color: var(--slate-light); font-size: .7rem; display: block; margin-top: 1px; }
+    .nav-role {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      color: var(--slate-light);
+      font-size: .82rem;
+    }
+    .role-badge {
+      background: var(--navy-light);
+      border: 1px solid var(--navy-mid);
+      color: var(--emerald);
+      padding: .2rem .6rem;
+      border-radius: 20px;
+      font-size: .75rem;
+      font-weight: 500;
+    }
+
+    /* ── Main layout ─────────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      max-width: 900px;
+      width: 100%;
+      margin: 2rem auto;
+      padding: 0 1.25rem;
+    }
+
+    /* ── Page header ─────────────────────────────────────────────────── */
+    .page-header { margin-bottom: 1.75rem; }
+    .page-header h1 {
+      font-size: 1.75rem;
+      font-weight: 800;
+      color: var(--navy);
+      letter-spacing: -.02em;
+      line-height: 1.2;
+    }
+    .page-header h1 em { color: var(--emerald); font-style: normal; }
+    .page-header p {
+      color: var(--slate);
+      font-size: .9rem;
+      margin-top: .4rem;
+    }
+
+    /* ── Card ────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      box-shadow: var(--shadow-sm);
+      margin-bottom: 1.25rem;
+    }
+    .card-title {
+      font-size: .85rem;
+      font-weight: 600;
+      color: var(--slate);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-bottom: .85rem;
+    }
+
+    /* ── Query form ──────────────────────────────────────────────────── */
+    .query-area {
+      width: 100%;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .85rem 1rem;
+      font-family: inherit;
+      font-size: .95rem;
+      color: var(--navy);
+      resize: vertical;
+      min-height: 110px;
+      transition: border-color .2s;
+      outline: none;
+      background: var(--white);
+    }
+    .query-area:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(16,185,129,.12); }
+    .query-area::placeholder { color: var(--slate-light); }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: .85rem;
+      margin-top: .85rem;
+    }
+    .form-group label {
+      display: block;
+      font-size: .78rem;
+      font-weight: 500;
+      color: var(--slate);
+      margin-bottom: .3rem;
+    }
+    .form-group select,
+    .form-group input[type="range"] {
+      width: 100%;
+    }
+    select {
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .45rem .75rem;
+      font-family: inherit;
+      font-size: .88rem;
+      color: var(--navy);
+      background: var(--white);
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2364748b' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right .6rem center;
+      outline: none;
+      transition: border-color .2s;
+      cursor: pointer;
+    }
+    select:focus { border-color: var(--emerald); }
+    input[type="range"] {
+      accent-color: var(--emerald);
+      cursor: pointer;
+    }
+    .range-value {
+      display: inline-block;
+      background: var(--emerald-pale);
+      color: var(--emerald-dark);
+      font-size: .75rem;
+      font-weight: 600;
+      padding: .1rem .45rem;
+      border-radius: 20px;
+      margin-left: .4rem;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      margin-top: .85rem;
+    }
+    .toggle {
+      position: relative;
+      width: 38px; height: 20px;
+      flex-shrink: 0;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .slider::before {
+      content: '';
+      position: absolute;
+      width: 14px; height: 14px;
+      left: 3px; top: 3px;
+      background: var(--white);
+      border-radius: 50%;
+      transition: transform .2s;
+    }
+    .toggle input:checked + .slider { background: var(--emerald); }
+    .toggle input:checked + .slider::before { transform: translateX(18px); }
+    .toggle-label { font-size: .85rem; color: var(--navy); }
+    .toggle-label small { color: var(--slate); display: block; font-size: .75rem; }
+
+    .btn-submit {
+      margin-top: 1.1rem;
+      width: 100%;
+      padding: .75rem;
+      background: linear-gradient(135deg, var(--emerald) 0%, var(--emerald-dark) 100%);
+      color: var(--white);
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: inherit;
+      font-size: .95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .2s, transform .15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: .5rem;
+    }
+    .btn-submit:hover { opacity: .92; }
+    .btn-submit:active { transform: scale(.99); }
+    .btn-submit:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-submit .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: var(--white);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Results section ─────────────────────────────────────────────── */
+    #results { display: none; }
+    #results.visible { display: block; animation: fadeUp .35s ease; }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Metrics row ─────────────────────────────────────────────────── */
+    .metrics-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: .85rem;
+      margin-bottom: 1.25rem;
+    }
+    .metric-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .9rem 1rem;
+      text-align: center;
+      box-shadow: var(--shadow-sm);
+    }
+    .metric-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--navy);
+      line-height: 1;
+    }
+    .metric-label {
+      font-size: .72rem;
+      color: var(--slate);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-top: .3rem;
+    }
+    .metric-card.high .metric-value   { color: var(--emerald-dark); }
+    .metric-card.medium .metric-value { color: var(--amber); }
+    .metric-card.low .metric-value    { color: var(--red); }
+
+    /* ── Confidence meter ────────────────────────────────────────────── */
+    .confidence-bar {
+      width: 100%;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      margin-top: .5rem;
+      overflow: hidden;
+    }
+    .confidence-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width .6s ease;
+    }
+    .conf-high   .confidence-fill { background: var(--emerald); }
+    .conf-medium .confidence-fill { background: var(--amber); }
+    .conf-low    .confidence-fill { background: var(--red); }
+
+    /* ── Safety flags ────────────────────────────────────────────────── */
+    .safety-flag {
+      border-radius: var(--radius-sm);
+      padding: .7rem .9rem;
+      margin-bottom: .6rem;
+      border-left: 4px solid;
+      font-size: .875rem;
+    }
+    .safety-flag.critical { background: var(--red-pale);   border-color: var(--red);   }
+    .safety-flag.warning  { background: var(--amber-pale); border-color: var(--amber); }
+    .safety-flag.info     { background: var(--emerald-pale); border-color: var(--emerald); }
+    .safety-flag .flag-title { font-weight: 600; margin-bottom: .25rem; }
+    .safety-flag .flag-rationale { color: var(--slate); font-size: .82rem; }
+
+    /* ── Answer text ─────────────────────────────────────────────────── */
+    .answer-text {
+      font-size: .9375rem;
+      line-height: 1.65;
+      color: var(--navy);
+      white-space: pre-wrap;
+    }
+    .typing-cursor {
+      display: inline-block;
+      width: 2px;
+      height: 1em;
+      background: var(--emerald);
+      animation: blink .6s step-end infinite;
+      vertical-align: text-bottom;
+      margin-left: 1px;
+    }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+    /* ── Recommendations ─────────────────────────────────────────────── */
+    .recs-list { list-style: none; }
+    .recs-list li {
+      padding: .45rem 0 .45rem 1.5rem;
+      position: relative;
+      font-size: .875rem;
+      color: var(--navy);
+      border-bottom: 1px solid var(--bg);
+    }
+    .recs-list li:last-child { border-bottom: none; }
+    .recs-list li::before {
+      content: '→';
+      position: absolute;
+      left: 0;
+      color: var(--emerald);
+      font-weight: 600;
+    }
+
+    /* ── Citation cards ──────────────────────────────────────────────── */
+    .citation-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      margin-bottom: .6rem;
+    }
+    .citation-header {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      padding: .65rem .85rem;
+      background: var(--bg);
+      cursor: pointer;
+      user-select: none;
+      transition: background .15s;
+    }
+    .citation-header:hover { background: var(--emerald-pale); }
+    .citation-num {
+      background: var(--navy);
+      color: var(--white);
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .7rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .citation-title { flex: 1; font-size: .82rem; font-weight: 500; color: var(--navy); }
+    .tier-badge {
+      font-size: .68rem;
+      font-weight: 600;
+      padding: .15rem .5rem;
+      border-radius: 20px;
+      color: var(--white);
+    }
+    .tier-1 { background: #1a5276; }
+    .tier-2 { background: #117a65; }
+    .tier-3 { background: #7d6608; }
+    .tier-4 { background: #6e2f00; }
+    .tier-5 { background: #512e5f; }
+    .chevron {
+      color: var(--slate);
+      font-size: .75rem;
+      transition: transform .2s;
+    }
+    .citation-card.open .chevron { transform: rotate(180deg); }
+    .citation-body {
+      display: none;
+      padding: .75rem .85rem;
+      background: var(--white);
+      border-top: 1px solid var(--border);
+    }
+    .citation-card.open .citation-body { display: block; }
+    .citation-excerpt {
+      font-size: .82rem;
+      color: var(--slate);
+      line-height: 1.55;
+      font-style: italic;
+      margin-bottom: .5rem;
+    }
+    .citation-link {
+      font-size: .78rem;
+      color: var(--emerald-dark);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .citation-link:hover { text-decoration: underline; }
+
+    /* ── Evidence summary ────────────────────────────────────────────── */
+    .evidence-summary {
+      font-size: .8rem;
+      color: var(--slate);
+      padding: .5rem .85rem;
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+    }
+
+    /* ── Disclaimer card ─────────────────────────────────────────────── */
+    .disclaimer-card {
+      background: var(--amber-pale);
+      border: 1px solid #fbbf24;
+      border-radius: var(--radius-sm);
+      padding: .75rem .9rem;
+      font-size: .82rem;
+      color: #78350f;
+      line-height: 1.5;
+      margin-top: 1rem;
+    }
+
+    /* ── Section headings ────────────────────────────────────────────── */
+    .section-heading {
+      font-size: .8rem;
+      font-weight: 600;
+      color: var(--slate);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin: 1.25rem 0 .65rem;
+      display: flex;
+      align-items: center;
+      gap: .4rem;
+    }
+    .section-heading::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ── Footer ──────────────────────────────────────────────────────── */
+    footer {
+      background: var(--navy);
+      color: var(--slate-light);
+      text-align: center;
+      padding: 1rem;
+      font-size: .75rem;
+    }
+    footer a { color: var(--slate-light); text-decoration: none; }
+
+    /* ── Responsive ──────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      header { padding: .75rem 1rem; }
+      main { margin: 1rem auto; }
+      .metrics-row { grid-template-columns: 1fr 1fr; }
+      .metrics-row .metric-card:last-child { grid-column: span 2; }
+      .form-row { grid-template-columns: 1fr; }
+      .page-header h1 { font-size: 1.35rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Disclaimer banner (always visible) -->
+<div class="disclaimer-banner">
+  ⚕️ CLINICAL DECISION SUPPORT ONLY
+  <span>All information must be validated by a qualified healthcare professional before clinical application.</span>
+</div>
+
+<!-- Navigation -->
+<header>
+  <a class="logo" href="#">
+    <div class="logo-icon">🧬</div>
+    <div class="logo-text">
+      <strong>REGENOVA-Intel</strong>
+      <small>Peptide Prescribing Assistant</small>
+    </div>
+  </a>
+  <div class="nav-role">
+    <span>Role:</span>
+    <span class="role-badge" id="roleBadge">Clinician</span>
+  </div>
+</header>
+
+<!-- Main content -->
+<main>
+  <div class="page-header">
+    <h1>Peptide <em>Evidence Query</em></h1>
+    <p>Ask evidence-based questions about peptide therapy. Responses are sourced from tiered clinical literature and synthesised by AI.</p>
+  </div>
+
+  <!-- Query form card -->
+  <div class="card">
+    <div class="card-title">📝 Clinical Query</div>
+
+    <textarea
+      id="queryInput"
+      class="query-area"
+      placeholder="e.g. What is the current evidence for BPC-157 in tendon healing? Include dosing considerations."
+      rows="4"
+    ></textarea>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="roleSelect">Clinician Role</label>
+        <select id="roleSelect">
+          <option value="clinician">Clinician</option>
+          <option value="researcher">Researcher</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="topKSlider">
+          Context chunks
+          <span class="range-value" id="topKValue">5</span>
+        </label>
+        <input type="range" id="topKSlider" min="1" max="10" value="5" />
+      </div>
+    </div>
+
+    <div class="toggle-row">
+      <label class="toggle">
+        <input type="checkbox" id="reconstitutionToggle" />
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label">
+        Include reconstitution guidance
+        <small>Requires clinician or admin role + feature flag</small>
+      </span>
+    </div>
+
+    <button class="btn-submit" id="submitBtn" onclick="handleSubmit()">
+      <span id="btnIcon">🔍</span>
+      <span id="btnText">Search Evidence Base</span>
+    </button>
+  </div>
+
+  <!-- Results -->
+  <div id="results">
+    <!-- Metrics -->
+    <div class="metrics-row" id="metricsRow">
+      <div class="metric-card" id="metricConfidence">
+        <div class="metric-value" id="confValue">—</div>
+        <div class="metric-label">Confidence</div>
+        <div class="confidence-bar"><div class="confidence-fill" id="confFill" style="width:0%"></div></div>
+      </div>
+      <div class="metric-card" id="metricLatency">
+        <div class="metric-value" id="latencyValue">—</div>
+        <div class="metric-label">Latency</div>
+      </div>
+      <div class="metric-card" id="metricCitations">
+        <div class="metric-value" id="citationsValue">—</div>
+        <div class="metric-label">Citations</div>
+      </div>
+    </div>
+
+    <!-- Safety flags -->
+    <div id="safetySection" style="display:none">
+      <div class="section-heading">⚠️ Safety Flags</div>
+      <div id="safetyFlags"></div>
+    </div>
+
+    <!-- Answer -->
+    <div class="section-heading">📋 Answer</div>
+    <div class="card" style="padding: 1.25rem">
+      <div class="answer-text" id="answerText"></div>
+    </div>
+
+    <!-- Recommendations -->
+    <div id="recsSection" style="display:none">
+      <div class="section-heading">✅ Recommendations</div>
+      <div class="card" style="padding: .85rem 1.25rem">
+        <ul class="recs-list" id="recsList"></ul>
+      </div>
+    </div>
+
+    <!-- Citations -->
+    <div id="citationsSection" style="display:none">
+      <div class="section-heading">📚 Citations</div>
+      <div id="citationsList"></div>
+    </div>
+
+    <!-- Evidence summary -->
+    <div id="evidenceSection" style="display:none">
+      <div class="evidence-summary" id="evidenceSummary"></div>
+    </div>
+
+    <!-- Disclaimer -->
+    <div class="disclaimer-card" id="disclaimerCard"></div>
+  </div>
+</main>
+
+<footer>
+  <p>REGENOVA-Intel v0.1 &nbsp;·&nbsp; Clinical Decision Support Only &nbsp;·&nbsp; Not Medical Advice
+  &nbsp;·&nbsp; <a href="/docs">API Docs</a></p>
+</footer>
+
+<script>
+  // ── Configuration constants ──────────────────────────────────────────────
+  const CONFIG = {
+    TYPING_SPEED_MS: 8,   // ms per character for answer typing animation
+  };
+
+  // ── Session ID (audit correlation) — uses CSPRNG ────────────────────────
+  const SESSION_ID = (
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? 'sess_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+      : 'sess_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+  );
+
+  // ── API base URL (same origin) ───────────────────────────────────────────
+  const API_BASE = '';
+
+  // ── Sync role badge ──────────────────────────────────────────────────────
+  document.getElementById('roleSelect').addEventListener('change', function () {
+    document.getElementById('roleBadge').textContent =
+      this.options[this.selectedIndex].text;
+  });
+
+  // ── Sync slider display ──────────────────────────────────────────────────
+  document.getElementById('topKSlider').addEventListener('input', function () {
+    document.getElementById('topKValue').textContent = this.value;
+  });
+
+  // ── Submit handler ───────────────────────────────────────────────────────
+  async function handleSubmit() {
+    const query = document.getElementById('queryInput').value.trim();
+    if (!query) {
+      shake(document.getElementById('queryInput'));
+      return;
+    }
+
+    const role    = document.getElementById('roleSelect').value;
+    const topK    = parseInt(document.getElementById('topKSlider').value, 10);
+    const recon   = document.getElementById('reconstitutionToggle').checked;
+
+    setLoading(true);
+
+    try {
+      const resp = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          role,
+          context_window_size: topK,
+          include_reconstitution: recon,
+          session_id: SESSION_ID,
+        }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail));
+      }
+
+      const data = await resp.json();
+      renderResults(data);
+    } catch (err) {
+      renderError(err.message || 'Network error — please check the API is running.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Allow Ctrl+Enter to submit
+  document.getElementById('queryInput').addEventListener('keydown', function (e) {
+    if (e.ctrlKey && e.key === 'Enter') handleSubmit();
+  });
+
+  // ── Render helpers ───────────────────────────────────────────────────────
+  function setLoading(isLoading) {
+    const btn  = document.getElementById('submitBtn');
+    const icon = document.getElementById('btnIcon');
+    const text = document.getElementById('btnText');
+    if (isLoading) {
+      btn.disabled = true;
+      icon.outerHTML = '<span id="btnIcon" class="spinner"></span>';
+      document.getElementById('btnText').textContent = 'Searching evidence base…';
+      document.getElementById('results').classList.remove('visible');
+    } else {
+      btn.disabled = false;
+      document.getElementById('btnIcon').outerHTML = '<span id="btnIcon">🔍</span>';
+      document.getElementById('btnText').textContent = 'Search Evidence Base';
+    }
+  }
+
+  function renderResults(data) {
+    const confidence = data.confidence ?? 0;
+    const confPct    = Math.round(confidence * 100);
+    const confClass  = confidence >= 0.7 ? 'high' : confidence >= 0.4 ? 'medium' : 'low';
+    const confLabel  = confidence >= 0.7 ? '🟢 ' + confPct + '%' : confidence >= 0.4 ? '🟡 ' + confPct + '%' : '🔴 ' + confPct + '%';
+
+    // Metrics
+    const confCard = document.getElementById('metricConfidence');
+    confCard.className = 'metric-card ' + confClass;
+    confCard.classList.add('conf-' + confClass);
+    document.getElementById('confValue').textContent = confLabel;
+    document.getElementById('confFill').style.width  = confPct + '%';
+    document.getElementById('latencyValue').textContent = (data.latency_ms ?? 0) + 'ms';
+    document.getElementById('citationsValue').textContent = (data.citations ?? []).length;
+
+    // Safety flags
+    const flags = data.safety_flags ?? [];
+    if (flags.length) {
+      document.getElementById('safetySection').style.display = '';
+      document.getElementById('safetyFlags').innerHTML = flags.map(f => {
+        const icon = f.severity === 'critical' ? '🚨' : f.severity === 'warning' ? '⚠️' : 'ℹ️';
+        return `<div class="safety-flag ${escHtml(f.severity)}">
+          <div class="flag-title">${icon} [${escHtml(f.code)}] ${escHtml(f.message)}</div>
+          <div class="flag-rationale">${escHtml(f.rationale)}</div>
+        </div>`;
+      }).join('');
+    } else {
+      document.getElementById('safetySection').style.display = 'none';
+    }
+
+    // Answer (typing animation)
+    const answerEl = document.getElementById('answerText');
+    answerEl.textContent = '';
+    typeText(answerEl, data.answer ?? 'No answer generated.');
+
+    // Recommendations
+    const recs = data.recommendations ?? [];
+    if (recs.length) {
+      document.getElementById('recsSection').style.display = '';
+      document.getElementById('recsList').innerHTML =
+        recs.map(r => `<li>${escHtml(r)}</li>`).join('');
+    } else {
+      document.getElementById('recsSection').style.display = 'none';
+    }
+
+    // Citations
+    const citations = data.citations ?? [];
+    if (citations.length) {
+      document.getElementById('citationsSection').style.display = '';
+      document.getElementById('citationsList').innerHTML = citations.map((c, i) => {
+        const tierClass = 'tier-' + Math.min(5, Math.max(1, c.evidence_tier ?? 3));
+        return `<div class="citation-card" id="cit-${i}">
+          <div class="citation-header" onclick="toggleCitation(${i})">
+            <div class="citation-num">${i + 1}</div>
+            <div class="citation-title">${escHtml(c.source_name ?? 'Unknown Source')}</div>
+            <span class="tier-badge ${tierClass}">Tier ${c.evidence_tier ?? '?'}</span>
+            <span class="chevron">▾</span>
+          </div>
+          <div class="citation-body">
+            <div class="citation-excerpt">"${escHtml((c.excerpt ?? '').slice(0, 300))}${(c.excerpt ?? '').length > 300 ? '…' : ''}"</div>
+            ${c.url ? `<a class="citation-link" href="${escHtml(c.url)}" target="_blank" rel="noopener">🔗 View source</a>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+    } else {
+      document.getElementById('citationsSection').style.display = 'none';
+    }
+
+    // Evidence summary
+    if (data.evidence_summary) {
+      document.getElementById('evidenceSection').style.display = '';
+      document.getElementById('evidenceSummary').textContent = '📊 ' + data.evidence_summary;
+    } else {
+      document.getElementById('evidenceSection').style.display = 'none';
+    }
+
+    // Disclaimer
+    document.getElementById('disclaimerCard').textContent = data.disclaimer ?? '';
+
+    // Show results
+    const resultsEl = document.getElementById('results');
+    resultsEl.classList.add('visible');
+    resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderError(msg) {
+    const resultsEl = document.getElementById('results');
+    resultsEl.innerHTML = `
+      <div class="card" style="border-color:var(--red);background:var(--red-pale)">
+        <div style="color:var(--red);font-weight:600;font-size:.9rem">⚠️ Request Failed</div>
+        <div style="font-size:.85rem;color:var(--navy);margin-top:.4rem">${escHtml(msg)}</div>
+      </div>`;
+    resultsEl.classList.add('visible');
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  // ── Typing animation ─────────────────────────────────────────────────────
+  function typeText(el, text) {
+    el.innerHTML = '';
+    const cursor = document.createElement('span');
+    cursor.className = 'typing-cursor';
+    el.appendChild(cursor);
+    let i = 0;
+    function next() {
+      if (i < text.length) {
+        el.insertBefore(document.createTextNode(text[i++]), cursor);
+        setTimeout(next, CONFIG.TYPING_SPEED_MS);
+      } else {
+        cursor.remove();
+      }
+    }
+    next();
+  }
+
+  // ── Citation accordion ────────────────────────────────────────────────────
+  function toggleCitation(i) {
+    document.getElementById('cit-' + i).classList.toggle('open');
+  }
+
+  // ── Utility ──────────────────────────────────────────────────────────────
+  function escHtml(str) {
+    return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function shake(el) {
+    el.style.animation = 'none';
+    el.offsetHeight; // reflow
+    el.style.animation = 'shake .35s ease';
+    el.addEventListener('animationend', () => { el.style.animation = ''; }, { once: true });
+  }
+</script>
+
+<style>
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    20%,60% { transform: translateX(-6px); }
+    40%,80% { transform: translateX(6px); }
+  }
+</style>
+
+</body>
+</html>
