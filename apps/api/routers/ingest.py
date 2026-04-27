@@ -84,8 +84,14 @@ def _run_single_ingestion_task(
     start = time.time()
     try:
         module_path, class_name = _INGESTOR_MAP[source_type]
-        mod = importlib.import_module(module_path)
-        result = getattr(mod, class_name)().run()
+        try:
+            mod = importlib.import_module(module_path)
+            ingestor_cls = getattr(mod, class_name)
+        except (ImportError, AttributeError) as load_exc:
+            raise RuntimeError(
+                f"Could not load ingestor '{class_name}' from '{module_path}': {load_exc}"
+            ) from load_exc
+        result = ingestor_cls().run()
         audit_store.update_ingest_job(
             job_id,
             status="completed" if result.success else "failed",

@@ -647,8 +647,17 @@
 </footer>
 
 <script>
-  // ── Session ID (audit correlation) ──────────────────────────────────────
-  const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  // ── Configuration constants ──────────────────────────────────────────────
+  const CONFIG = {
+    TYPING_SPEED_MS: 8,   // ms per character for answer typing animation
+  };
+
+  // ── Session ID (audit correlation) — uses CSPRNG ────────────────────────
+  const SESSION_ID = (
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? 'sess_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+      : 'sess_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+  );
 
   // ── API base URL (same origin) ───────────────────────────────────────────
   const API_BASE = '';
@@ -830,11 +839,10 @@
     cursor.className = 'typing-cursor';
     el.appendChild(cursor);
     let i = 0;
-    const SPEED = 8; // ms per character
     function next() {
       if (i < text.length) {
         el.insertBefore(document.createTextNode(text[i++]), cursor);
-        setTimeout(next, SPEED);
+        setTimeout(next, CONFIG.TYPING_SPEED_MS);
       } else {
         cursor.remove();
       }

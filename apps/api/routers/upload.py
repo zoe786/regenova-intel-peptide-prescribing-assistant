@@ -196,8 +196,14 @@ async def upload_documents(
             rejected.append({"filename": filename, "reason": f"Unsupported extension '{suffix}'"})
             continue
 
-        # Read file content for size check (streaming to avoid memory issues)
-        content = await upload.read()
+        # Check Content-Length from headers when available to avoid reading oversized files
+        content_length = upload.headers.get("content-length") if upload.headers else None
+        if content_length and int(content_length) > _MAX_FILE_SIZE:
+            rejected.append({"filename": filename, "reason": "File exceeds 50 MB limit"})
+            continue
+
+        # Read file content in a bounded way
+        content = await upload.read(_MAX_FILE_SIZE + 1)
         if len(content) > _MAX_FILE_SIZE:
             rejected.append({"filename": filename, "reason": "File exceeds 50 MB limit"})
             continue

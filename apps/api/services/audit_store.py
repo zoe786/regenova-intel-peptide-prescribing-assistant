@@ -9,13 +9,17 @@ Provides thread-safe logging of:
 
 All tables are created on first access via _ensure_schema().
 WAL mode is enabled for concurrent read safety.
+IP addresses are hashed using HMAC-SHA256 with a per-deployment secret salt
+to provide privacy while preventing rainbow-table attacks.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import os
 import sqlite3
 import threading
 import uuid
@@ -66,14 +70,20 @@ class AuditStore:
     SQLite writes from multiple worker threads.
     """
 
-    def __init__(self, db_path: str = "./data/audit.db") -> None:
+    def __init__(self, db_path: str = "./data/audit.db", ip_salt: str = "") -> None:
         """Initialise the audit store and ensure the schema exists.
 
         Args:
             db_path: Path to the SQLite database file.
+            ip_salt: Secret salt used when hashing IP addresses (HMAC-SHA256).
+                     Defaults to the AUDIT_IP_SALT env-var or a random value.
         """
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Use caller-supplied salt, env-var, or generate a one-time random salt.
+        self._ip_salt: bytes = (
+            ip_salt or os.getenv("AUDIT_IP_SALT", "")
+        ).encode() or os.urandom(32)
         self._lock = threading.Lock()
         self._ensure_schema()
         logger.info("AuditStore initialised at %s", self.db_path)
@@ -103,12 +113,16 @@ class AuditStore:
     def _now() -> str:
         return datetime.now(tz=timezone.utc).isoformat()
 
-    @staticmethod
-    def _hash_ip(ip: str) -> str:
-        """One-way hash of an IP address for privacy compliance."""
+    def _hash_ip(self, ip: str) -> str:
+        """HMAC-SHA256 hash of an IP address for privacy compliance.
+
+        Using a salted HMAC prevents rainbow-table attacks against
+        the small IPv4 address space while still enabling correlation
+        of events from the same source within a deployment.
+        """
         if not ip:
             return ""
-        return hashlib.sha256(ip.encode()).hexdigest()[:16]
+        return hmac.new(self._ip_salt, ip.encode(), hashlib.sha256).hexdigest()[:24]
 
     # ── Audit Events ──────────────────────────────────────────────────────────
 

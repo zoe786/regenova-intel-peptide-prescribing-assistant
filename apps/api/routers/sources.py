@@ -1,12 +1,12 @@
 """Source and chunk management endpoints (admin-only).
 
 Provides CRUD over the knowledge base:
-- GET  /sources                  — list unique source documents
-- DELETE /sources/{document_id}  — delete all chunks for a document
-- GET  /chunks                   — paginated, filtered chunk list
-- GET  /chunks/{chunk_id}        — full chunk detail
-- DELETE /chunks/{chunk_id}      — delete a specific chunk
-- PATCH  /chunks/{chunk_id}      — update chunk metadata
+- GET  /sources                   - list unique source documents
+- DELETE /sources/{document_id}   - delete all chunks for a document
+- GET  /chunks                    - paginated, filtered chunk list
+- GET  /chunks/{chunk_id}         - full chunk detail
+- DELETE /chunks/{chunk_id}       - delete a specific chunk
+- PATCH  /chunks/{chunk_id}       - update chunk metadata
 
 All mutations are logged to the audit store.
 All endpoints require X-Admin-Key header.
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -30,8 +31,27 @@ router = APIRouter(tags=["Sources & Chunks"])
 
 _CHROMA_COLLECTION = "regenova_intel_chunks"
 
+# Regex that chunk_ids and document_ids must match before use in file paths.
+_SAFE_ID_RE = re.compile(r'^[\w\-:.]+$')
 
-# ── Auth / dependency helpers ──────────────────────────────────────────────────
+
+def _validate_id_for_path(value: str, field: str) -> None:
+    """Raise HTTPException 422 if value contains path-traversal characters."""
+    if not _SAFE_ID_RE.match(value):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "type": "invalid_input",
+                "title": f"Invalid characters in {field}",
+                "detail": (
+                    f"{field} must only contain alphanumeric characters, "
+                    "hyphens, underscores, colons, or dots."
+                ),
+            },
+        )
+
+
+# -- Auth / dependency helpers -------------------------------------------------
 
 def _require_admin_key(
     x_admin_key: Annotated[str, Header(description="Admin API key")],
@@ -62,11 +82,15 @@ def _get_collection(settings: Settings) -> Any:
         logger.error("ChromaDB unavailable: %s", exc)
         raise HTTPException(
             status_code=503,
-            detail={"type": "service_unavailable", "title": "Vector store unavailable", "detail": str(exc)},
+            detail={
+                "type": "service_unavailable",
+                "title": "Vector store unavailable",
+                "detail": str(exc),
+            },
         )
 
 
-# ── Request schemas ────────────────────────────────────────────────────────────
+# -- Request schemas -----------------------------------------------------------
 
 class ChunkPatchRequest(BaseModel):
     """Fields that can be patched on an existing chunk."""
@@ -81,7 +105,7 @@ class ChunkPatchRequest(BaseModel):
     )
 
 
-# ── Source endpoints ───────────────────────────────────────────────────────────
+# -- Source endpoints ----------------------------------------------------------
 
 @router.get(
     "/sources",
@@ -104,19 +128,32 @@ async def list_sources(
         if total == 0:
             return {"sources": [], "total": 0}
 
-        # Fetch all metadata (no documents — faster)
-        all_meta = collection.get(include=["metadatas"])
-        metadatas = all_meta.get("metadatas") or []
-        ids = all_meta.get("ids") or []
+        # Fetch metadata in batches of 500 to avoid unbounded memory usage
+        PAGE = 500
+        all_metadatas: list[dict] = []
+        all_ids: list[str] = []
+        fetched = 0
+        while fetched < total:
+            batch = collection.get(
+                include=["metadatas"],
+                limit=PAGE,
+                offset=fetched,
+            )
+            batch_ids = batch.get("ids") or []
+            batch_metas = batch.get("metadatas") or []
+            if not batch_ids:
+                break
+            all_ids.extend(batch_ids)
+            all_metadatas.extend(batch_metas)
+            fetched += len(batch_ids)
 
         # Group by document_id
         docs: dict[str, dict] = {}
-        for chunk_id, meta in zip(ids, metadatas):
-            doc_id = meta.get("document_id", chunk_id)
+        for chunk_id_val, meta in zip(all_ids, all_metadatas):
+            doc_id = meta.get("document_id", chunk_id_val)
             src_type = meta.get("source_type", "unknown")
             tier = int(meta.get("evidence_tier_default", 3))
 
-            # Apply filters
             if source_type and src_type != source_type:
                 continue
             if evidence_tier and tier != evidence_tier:
@@ -163,10 +200,10 @@ async def delete_source(
     audit_store: AuditStore = Depends(_get_audit_store),
 ) -> dict:
     """Delete every chunk belonging to document_id from vector store and disk."""
+    _validate_id_for_path(document_id, "document_id")
     collection = _get_collection(settings)
 
     try:
-        # Find all chunk IDs for this document
         results = collection.get(
             where={"document_id": document_id},
             include=["metadatas"],
@@ -181,10 +218,13 @@ async def delete_source(
 
         collection.delete(ids=chunk_ids)
 
-        # Delete normalized JSON files
+        # Delete normalized JSON files — validate each chunk_id before path use
         norm_dir = Path(settings.processed_data_dir) / "normalized"
         deleted_files = 0
         for cid in chunk_ids:
+            if not _SAFE_ID_RE.match(cid):
+                logger.warning("Skipping unsafe chunk_id in file deletion: %r", cid)
+                continue
             fpath = norm_dir / f"{cid}.json"
             if fpath.exists():
                 fpath.unlink()
@@ -222,7 +262,7 @@ async def delete_source(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-# ── Chunk endpoints ────────────────────────────────────────────────────────────
+# -- Chunk endpoints -----------------------------------------------------------
 
 @router.get(
     "/chunks",
@@ -256,13 +296,6 @@ async def list_chunks(
         elif len(conditions) == 1:
             where = conditions[0]
 
-        get_kwargs: dict[str, Any] = {
-            "include": ["documents", "metadatas"],
-            "limit": limit + offset,
-        }
-        if where:
-            get_kwargs["where"] = where
-
         if search:
             results = collection.query(
                 query_texts=[search],
@@ -274,12 +307,19 @@ async def list_chunks(
             docs = results.get("documents", [[]])[0]
             metas = results.get("metadatas", [[]])[0]
         else:
+            get_kwargs: dict[str, Any] = {
+                "include": ["documents", "metadatas"],
+                "limit": limit,
+                "offset": offset,
+            }
+            if where:
+                get_kwargs["where"] = where
+
             results = collection.get(**get_kwargs)
             ids = results.get("ids") or []
             docs = results.get("documents") or []
             metas = results.get("metadatas") or []
 
-        # Build response items
         items = []
         for cid, doc, meta in zip(ids, docs, metas):
             items.append({
@@ -290,12 +330,8 @@ async def list_chunks(
                 "source_url": meta.get("source_url") or None,
                 "evidence_tier_default": int(meta.get("evidence_tier_default", 3)),
                 "acquired_at": meta.get("acquired_at"),
-                "snippet": doc[:200] + ("…" if len(doc) > 200 else ""),
+                "snippet": doc[:200] + ("\u2026" if len(doc) > 200 else ""),
             })
-
-        # Paginate (for non-search path)
-        if not search:
-            items = items[offset:]
 
         return {
             "chunks": items,
@@ -321,6 +357,7 @@ async def get_chunk(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """Return the full content and metadata of a single chunk."""
+    _validate_id_for_path(chunk_id, "chunk_id")
     collection = _get_collection(settings)
 
     try:
@@ -364,10 +401,10 @@ async def delete_chunk(
     audit_store: AuditStore = Depends(_get_audit_store),
 ) -> dict:
     """Delete a chunk from the vector store and its normalized JSON file."""
+    _validate_id_for_path(chunk_id, "chunk_id")
     collection = _get_collection(settings)
 
     try:
-        # Verify chunk exists first
         existing = collection.get(ids=[chunk_id], include=["metadatas"])
         if not (existing.get("ids") or []):
             raise HTTPException(
@@ -424,6 +461,7 @@ async def patch_chunk(
     audit_store: AuditStore = Depends(_get_audit_store),
 ) -> dict:
     """Update mutable metadata fields on a chunk in the vector store and JSON file."""
+    _validate_id_for_path(chunk_id, "chunk_id")
     collection = _get_collection(settings)
 
     try:
@@ -435,8 +473,6 @@ async def patch_chunk(
             )
 
         old_meta: dict = dict((existing.get("metadatas") or [{}])[0])
-        doc = (existing.get("documents") or [""])[0]
-
         new_meta = dict(old_meta)
         changes: dict[str, Any] = {}
 
