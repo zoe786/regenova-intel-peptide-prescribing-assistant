@@ -81,9 +81,16 @@ class AuditStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # Use caller-supplied salt, env-var, or generate a one-time random salt.
-        self._ip_salt: bytes = (
-            ip_salt or os.getenv("AUDIT_IP_SALT", "")
-        ).encode() or os.urandom(32)
+        provided_salt = (ip_salt or os.getenv("AUDIT_IP_SALT", "")).encode()
+        if provided_salt:
+            self._ip_salt: bytes = provided_salt
+        else:
+            self._ip_salt = os.urandom(32)
+            logger.warning(
+                "AUDIT_IP_SALT not set — using a random per-process salt. "
+                "IP hashes will not be consistent across restarts. "
+                "Set AUDIT_IP_SALT in production for stable correlation."
+            )
         self._lock = threading.Lock()
         self._ensure_schema()
         logger.info("AuditStore initialised at %s", self.db_path)

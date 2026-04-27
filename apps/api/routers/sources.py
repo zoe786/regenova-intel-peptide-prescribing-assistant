@@ -51,6 +51,21 @@ def _validate_id_for_path(value: str, field: str) -> None:
         )
 
 
+def _safe_chunk_path(norm_dir: Path, chunk_id: str) -> Path | None:
+    """Return a resolved path for chunk_id.json confined to norm_dir, or None.
+
+    Resolves the candidate path and checks that it is a child of norm_dir.
+    This explicit confinement prevents path traversal even if chunk_id
+    somehow bypasses the regex check.
+    """
+    norm_dir_resolved = norm_dir.resolve()
+    candidate = (norm_dir / f"{chunk_id}.json").resolve()
+    if norm_dir_resolved in candidate.parents:
+        return candidate
+    logger.warning("Path traversal attempt blocked for chunk_id %r", chunk_id)
+    return None
+
+
 # -- Auth / dependency helpers -------------------------------------------------
 
 def _require_admin_key(
@@ -218,15 +233,12 @@ async def delete_source(
 
         collection.delete(ids=chunk_ids)
 
-        # Delete normalized JSON files — validate each chunk_id before path use
+        # Delete normalized JSON files — use path confinement to prevent traversal
         norm_dir = Path(settings.processed_data_dir) / "normalized"
         deleted_files = 0
         for cid in chunk_ids:
-            if not _SAFE_ID_RE.match(cid):
-                logger.warning("Skipping unsafe chunk_id in file deletion: %r", cid)
-                continue
-            fpath = norm_dir / f"{cid}.json"
-            if fpath.exists():
+            fpath = _safe_chunk_path(norm_dir, cid)
+            if fpath is not None and fpath.exists():
                 fpath.unlink()
                 deleted_files += 1
 
@@ -415,9 +427,10 @@ async def delete_chunk(
         meta = (existing.get("metadatas") or [{}])[0]
         collection.delete(ids=[chunk_id])
 
-        norm_path = Path(settings.processed_data_dir) / "normalized" / f"{chunk_id}.json"
+        norm_dir = Path(settings.processed_data_dir) / "normalized"
+        norm_path = _safe_chunk_path(norm_dir, chunk_id)
         file_deleted = False
-        if norm_path.exists():
+        if norm_path is not None and norm_path.exists():
             norm_path.unlink()
             file_deleted = True
 
@@ -488,9 +501,10 @@ async def patch_chunk(
 
         collection.update(ids=[chunk_id], metadatas=[new_meta])
 
-        # Update normalized JSON file if it exists
-        norm_path = Path(settings.processed_data_dir) / "normalized" / f"{chunk_id}.json"
-        if norm_path.exists():
+        # Update normalized JSON file if it exists — use path confinement
+        norm_dir = Path(settings.processed_data_dir) / "normalized"
+        norm_path = _safe_chunk_path(norm_dir, chunk_id)
+        if norm_path is not None and norm_path.exists():
             try:
                 data = json.loads(norm_path.read_text(encoding="utf-8"))
                 data["metadata"].update(changes)
