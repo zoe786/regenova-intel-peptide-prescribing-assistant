@@ -52,29 +52,27 @@ def _validate_id_for_path(value: str, field: str) -> None:
 
 
 def _safe_chunk_path(norm_dir: Path, chunk_id: str) -> Path | None:
-    """Return a resolved path for chunk_id.json confined to norm_dir, or None.
+    """Return the path to {chunk_id}.json inside norm_dir, or None.
 
-    Uses two independent defences:
-    1. Regex validation — rejects IDs containing directory separators or
-       other suspicious characters before any path operation.
-    2. Path.name extraction — strips any remaining directory components
-       from the constructed filename so the result can only be a leaf
-       inside norm_dir (recognised by static analysis as a sanitiser).
-    3. Parent equality check — resolves the candidate and verifies it is
-       a direct child of norm_dir (not an ancestor or sibling).
+    Instead of constructing a path from user-supplied input (which would
+    create a path-injection risk), this function:
+    1. Validates chunk_id against a strict allowlist regex.
+    2. Lists the normalized directory and checks whether any file's stem
+       matches the validated chunk_id.
+
+    This approach never constructs a path from user input, so no
+    directory-traversal is possible even if the regex were somehow bypassed.
     """
     if not _SAFE_ID_RE.fullmatch(chunk_id):
-        logger.warning("Blocked unsafe chunk_id in path lookup: %r", chunk_id)
+        logger.warning("Blocked unsafe chunk_id: %r", chunk_id)
         return None
-    norm_dir_resolved = norm_dir.resolve()
-    # Use Path.name to extract only the filename component — this strips any
-    # residual directory separators and breaks the taint chain for static analysis.
-    safe_name = Path(f"{chunk_id}.json").name
-    candidate = (norm_dir_resolved / safe_name).resolve()
-    if candidate.parent != norm_dir_resolved:
-        logger.warning("Path traversal blocked for chunk_id %r", chunk_id)
-        return None
-    return candidate
+    try:
+        for fpath in norm_dir.iterdir():
+            if fpath.is_file() and fpath.suffix == ".json" and fpath.stem == chunk_id:
+                return fpath
+    except OSError:
+        pass
+    return None
 
 
 # -- Auth / dependency helpers -------------------------------------------------
