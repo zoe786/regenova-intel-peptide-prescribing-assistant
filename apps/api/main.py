@@ -10,14 +10,18 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from apps.api.config import get_settings
 from apps.api.routers import chat, health, ingest
+from apps.api.routers import upload, sources, audit as audit_router
+from apps.api.services.audit_store import AuditStore
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +36,7 @@ _APP_VERSION = "0.1.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Manage application startup and shutdown lifecycle.
-
-    Startup: log configuration, warm up services.
-    Shutdown: clean up resources.
-    """
+    """Manage application startup and shutdown lifecycle."""
     settings = get_settings()
     logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
@@ -52,17 +52,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.chroma_persist_dir,
     )
 
+    # Initialise shared audit store
+    app.state.audit_store = AuditStore(db_path=settings.audit_db_path)
+    logger.info("AuditStore ready at %s", settings.audit_db_path)
+
     yield  # Application runs here
 
     logger.info("REGENOVA-Intel API shutting down")
 
 
 def create_app() -> FastAPI:
-    """Create and configure the FastAPI application.
-
-    Returns:
-        Configured FastAPI application instance.
-    """
+    """Create and configure the FastAPI application."""
     settings = get_settings()
 
     app = FastAPI(
@@ -129,10 +129,23 @@ def create_app() -> FastAPI:
             },
         )
 
-    # ── Routers ───────────────────────────────────────────────────────────
+    # ── API Routers ────────────────────────────────────────────────────────
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(ingest.router)
+    app.include_router(upload.router)
+    app.include_router(sources.router)
+    app.include_router(audit_router.router)
+
+    # ── Prescriber Frontend (static SPA) ──────────────────────────────────
+    frontend_dir = Path(settings.frontend_dir)
+    if frontend_dir.exists() and frontend_dir.is_dir():
+        app.mount("/app", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+        logger.info("Prescriber frontend mounted at /app from %s", frontend_dir)
+    else:
+        logger.warning(
+            "Frontend directory not found at %s — /app will return 404", frontend_dir
+        )
 
     return app
 

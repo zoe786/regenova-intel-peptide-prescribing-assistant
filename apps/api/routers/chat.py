@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from apps.api.config import Settings, get_settings
 from apps.api.schemas.chat import ChatRequest, ChatResponse
 from apps.api.services.answer_composer import AnswerComposer
+from apps.api.services.audit_store import AuditStore
 from apps.api.services.citation_service import CitationService
 from apps.api.services.ranking_service import RankingService
 from apps.api.services.retrieval_service import RetrievalService
@@ -203,5 +204,25 @@ async def chat(
         confidence=response.confidence,
         latency_ms=response.latency_ms,
     )
+
+    # 7. Persist structured audit event
+    try:
+        audit_store: AuditStore = request.app.state.audit_store
+        client_ip = request.client.host if request.client else ""
+        audit_store.log_event(
+            event_type="chat_query",
+            data={
+                "query_hash": hashlib.sha256(request_body.query.encode()).hexdigest()[:16],
+                "confidence": response.confidence,
+                "safety_flags": [f.code for f in flags],
+                "citations": len(response.citations),
+                "latency_ms": response.latency_ms,
+            },
+            role=request_body.role,
+            request_id=request_id,
+            ip=client_ip,
+        )
+    except Exception as audit_exc:
+        logger.warning("Audit log write failed (non-fatal): %s", audit_exc)
 
     return response
