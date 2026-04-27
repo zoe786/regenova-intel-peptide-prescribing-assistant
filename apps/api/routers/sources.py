@@ -54,16 +54,27 @@ def _validate_id_for_path(value: str, field: str) -> None:
 def _safe_chunk_path(norm_dir: Path, chunk_id: str) -> Path | None:
     """Return a resolved path for chunk_id.json confined to norm_dir, or None.
 
-    Resolves the candidate path and checks that it is a child of norm_dir.
-    This explicit confinement prevents path traversal even if chunk_id
-    somehow bypasses the regex check.
+    Uses two independent defences:
+    1. Regex validation — rejects IDs containing directory separators or
+       other suspicious characters before any path operation.
+    2. Path.name extraction — strips any remaining directory components
+       from the constructed filename so the result can only be a leaf
+       inside norm_dir (recognised by static analysis as a sanitiser).
+    3. Parent equality check — resolves the candidate and verifies it is
+       a direct child of norm_dir (not an ancestor or sibling).
     """
+    if not _SAFE_ID_RE.fullmatch(chunk_id):
+        logger.warning("Blocked unsafe chunk_id in path lookup: %r", chunk_id)
+        return None
     norm_dir_resolved = norm_dir.resolve()
-    candidate = (norm_dir / f"{chunk_id}.json").resolve()
-    if norm_dir_resolved in candidate.parents:
-        return candidate
-    logger.warning("Path traversal attempt blocked for chunk_id %r", chunk_id)
-    return None
+    # Use Path.name to extract only the filename component — this strips any
+    # residual directory separators and breaks the taint chain for static analysis.
+    safe_name = Path(f"{chunk_id}.json").name
+    candidate = (norm_dir_resolved / safe_name).resolve()
+    if candidate.parent != norm_dir_resolved:
+        logger.warning("Path traversal blocked for chunk_id %r", chunk_id)
+        return None
+    return candidate
 
 
 # -- Auth / dependency helpers -------------------------------------------------
