@@ -182,7 +182,8 @@ async def chat(
     composer = AnswerComposer(
         model=settings.llm_model,
         temperature=settings.llm_temperature,
-        openai_api_key=settings.openai_api_key,
+        api_key=settings.llm_api_key or settings.openai_api_key,
+        base_url=settings.llm_base_url,
     )
     response = composer.compose(
         query=request_body.query,

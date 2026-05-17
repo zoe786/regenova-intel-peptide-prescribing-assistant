@@ -59,8 +59,8 @@ success "Dependencies installed"
 if [ ! -f ".env" ]; then
     info "Creating .env from .env.example..."
     cp .env.example .env
-    success ".env created — edit it to set your OPENAI_API_KEY and other secrets"
-    warn "⚠️  Don't forget to set OPENAI_API_KEY in .env before running!"
+    success ".env created — edit it to set your LLM_API_KEY (or OPENAI_API_KEY) and other secrets"
+    warn "⚠️  Don't forget to set LLM_API_KEY (or OPENAI_API_KEY) in .env before running!"
 else
     info ".env already exists — skipping"
 fi
@@ -92,7 +92,7 @@ echo -e "\n${GREEN}╔═══════════════════�
 echo -e "${GREEN}║   Bootstrap Complete! 🎉               ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════╝${NC}\n"
 echo "Next steps:"
-echo "  1. Edit .env and set OPENAI_API_KEY"
+echo "  1. Edit .env and set LLM_API_KEY (or OPENAI_API_KEY)"
 echo "  2. Place source files in data/raw/<type>/"
 echo "  3. Run: make ingest-all"
 echo "  4. Run: make run-api"

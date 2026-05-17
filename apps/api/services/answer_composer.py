@@ -1,4 +1,4 @@
-"""Answer composition service using LangChain + OpenAI.
+"""Answer composition service using LangChain ChatOpenAI-compatible providers.
 
 Loads prompt templates, assembles context from ranked chunks,
 calls the LLM, and returns a complete ChatResponse.
@@ -69,26 +69,30 @@ class AnswerComposer:
     """Composes the final ChatResponse by calling the LLM with assembled context.
 
     Uses LangChain's ChatOpenAI for LLM calls with the clinician answer prompt
-    template. If critical safety flags are present, the safety guardrails
-    prompt is injected as an additional system message.
+    template. Supports OpenAI-compatible providers via configurable API key and
+    base URL. If critical safety flags are present, the safety guardrails prompt
+    is injected as an additional system message.
     """
 
     def __init__(
         self,
         model: str = "gpt-4o",
         temperature: float = 0.1,
-        openai_api_key: str = "",
+        api_key: str = "",
+        base_url: str = "",
     ) -> None:
         """Initialise AnswerComposer with LLM configuration.
 
         Args:
-            model: OpenAI model name.
+            model: Model name (provider-specific).
             temperature: Sampling temperature (low = more deterministic).
-            openai_api_key: OpenAI API key.
+            api_key: LLM provider API key.
+            base_url: Optional OpenAI-compatible API base URL.
         """
         self.model = model
         self.temperature = temperature
-        self.openai_api_key = openai_api_key
+        self.api_key = api_key
+        self.base_url = base_url
         self._system_prompt = _load_prompt(_CLINICIAN_ANSWER_PROMPT)
         self._safety_guardrails = _load_prompt(_SAFETY_GUARDRAILS_PROMPT)
 
@@ -174,7 +178,8 @@ class AnswerComposer:
             llm = ChatOpenAI(
                 model=self.model,
                 temperature=self.temperature,
-                api_key=self.openai_api_key or None,
+                api_key=self.api_key or None,
+                base_url=self.base_url or None,
             )
 
             system_content = self._system_prompt or (

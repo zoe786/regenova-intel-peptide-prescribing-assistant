@@ -1,4 +1,4 @@
-"""Claim extraction from normalized chunks using LLM.
+"""Claim extraction from normalized chunks using an OpenAI-compatible LLM.
 
 Extracts structured clinical claims from ingested document chunks
 and saves them to data/processed/claims/.
@@ -19,7 +19,7 @@ _CLAIMS_OUTPUT_DIR = Path("data/processed/claims")
 class ClaimExtractor:
     """Extracts structured clinical claims from NormalizedChunk content.
 
-    Uses an LLM (OpenAI via LangChain) with the claims.txt prompt to
+    Uses an OpenAI-compatible LLM via LangChain with the claims.txt prompt to
     identify and structure clinical claims, including:
     - claim_text: The specific clinical assertion
     - source_chunk_id: Reference to the source chunk
@@ -34,12 +34,15 @@ class ClaimExtractor:
         normalized_dir: Path = Path("data/processed/normalized"),
         output_dir: Path = Path("data/processed/claims"),
         model: str = "gpt-4o",
+        api_key: str = "",
+        base_url: str = "",
         openai_api_key: str = "",
     ) -> None:
         self.normalized_dir = Path(normalized_dir)
         self.output_dir = Path(output_dir)
         self.model = model
-        self.openai_api_key = openai_api_key
+        self.api_key = api_key or openai_api_key
+        self.base_url = base_url
         self._prompt = self._load_prompt()
 
     def _load_prompt(self) -> str:
@@ -64,7 +67,12 @@ class ClaimExtractor:
             from langchain_openai import ChatOpenAI  # type: ignore[import]
             from langchain_core.messages import HumanMessage, SystemMessage  # type: ignore[import]
 
-            llm = ChatOpenAI(model=self.model, temperature=0.0, api_key=self.openai_api_key or None)
+            llm = ChatOpenAI(
+                model=self.model,
+                temperature=0.0,
+                api_key=self.api_key or None,
+                base_url=self.base_url or None,
+            )
             system_msg = self._prompt or (
                 "Extract clinical claims as JSON array. Each claim: "
                 "{claim_text, confidence, peptide_mentioned, entities}"

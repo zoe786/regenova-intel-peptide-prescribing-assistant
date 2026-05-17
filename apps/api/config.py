@@ -31,7 +31,11 @@ class Settings(BaseSettings):
     )
 
     # ── LLM ───────────────────────────────────────────────────────────────
-    openai_api_key: str = Field(default="", description="OpenAI API key")
+    llm_api_key: str = Field(default="", description="LLM provider API key")
+    llm_base_url: str = Field(
+        default="", description="Optional OpenAI-compatible LLM base URL"
+    )
+    openai_api_key: str = Field(default="", description="Legacy OpenAI API key")
     llm_model: str = Field(default="gpt-4o", description="LLM model name")
     llm_temperature: float = Field(default=0.1, description="LLM sampling temperature")
 

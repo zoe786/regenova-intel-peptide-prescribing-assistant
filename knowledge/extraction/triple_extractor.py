@@ -1,4 +1,4 @@
-"""Subject-relation-object triple extractor using LLM.
+"""Subject-relation-object triple extractor using an OpenAI-compatible LLM.
 
 Takes claim records and extracts structured triples for knowledge graph construction.
 """
@@ -29,12 +29,15 @@ class TripleExtractor:
         claims_dir: Path = Path("data/processed/claims"),
         output_dir: Path = Path("data/processed/triples"),
         model: str = "gpt-4o",
+        api_key: str = "",
+        base_url: str = "",
         openai_api_key: str = "",
     ) -> None:
         self.claims_dir = Path(claims_dir)
         self.output_dir = Path(output_dir)
         self.model = model
-        self.openai_api_key = openai_api_key
+        self.api_key = api_key or openai_api_key
+        self.base_url = base_url
         self._prompt = self._load_prompt()
 
     def _load_prompt(self) -> str:
@@ -58,7 +61,12 @@ class TripleExtractor:
             from langchain_openai import ChatOpenAI  # type: ignore[import]
             from langchain_core.messages import HumanMessage, SystemMessage  # type: ignore[import]
 
-            llm = ChatOpenAI(model=self.model, temperature=0.0, api_key=self.openai_api_key or None)
+            llm = ChatOpenAI(
+                model=self.model,
+                temperature=0.0,
+                api_key=self.api_key or None,
+                base_url=self.base_url or None,
+            )
             system_msg = self._prompt or (
                 "Extract subject-relation-object triples as JSON. "
                 "Relations must be one of: " + ", ".join(sorted(VALID_RELATIONS))
