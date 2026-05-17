@@ -76,6 +76,12 @@ class Settings(BaseSettings):
         default="admin-dev-key", description="Admin API key"
     )
 
+    # ── Audit ─────────────────────────────────────────────────────────────
+    audit_ip_salt: str = Field(
+        default="change-this-to-a-random-secret-in-production",
+        description="HMAC-SHA256 salt for IP address hashing in audit logs",
+    )
+
     # ── Data Paths ────────────────────────────────────────────────────────
     raw_data_dir: str = Field(default="./data/raw", description="Raw data directory")
     processed_data_dir: str = Field(
@@ -117,6 +123,53 @@ class Settings(BaseSettings):
         ],
         description="Allowed CORS origins",
     )
+
+    # ── Docs ──────────────────────────────────────────────────────────────
+    enable_docs: bool = Field(
+        default=True,
+        description=(
+            "Expose /docs, /redoc and /openapi.json endpoints. "
+            "Set to false in production to hide the interactive API explorer."
+        ),
+    )
+
+    # ── Production safety guard ────────────────────────────────────────────
+
+    # Fields that must not use their shipped defaults when ENVIRONMENT=production.
+    _INSECURE_DEFAULTS: dict[str, tuple[str, ...]] = {
+        "jwt_secret": ("change-me-in-production",),
+        "admin_api_key": ("admin-dev-key",),
+        "audit_ip_salt": (
+            "change-this-to-a-random-secret-in-production",
+            "",
+        ),
+    }
+
+    def validate_for_production(self) -> None:
+        """Raise ValueError if running in production with insecure default secrets.
+
+        Call this once during application startup so that deployments with
+        unchanged example secrets are blocked before serving any traffic.
+
+        Raises:
+            ValueError: Listing every insecure field found.
+        """
+        if self.environment != "production":
+            return
+
+        violations: list[str] = []
+        for field_name, bad_values in self._INSECURE_DEFAULTS.items():
+            value: str = getattr(self, field_name, "")
+            if value in bad_values:
+                violations.append(f"  - {field_name.upper()} is set to an insecure default")
+
+        if violations:
+            raise ValueError(
+                "Production startup blocked — insecure defaults detected:\n"
+                + "\n".join(violations)
+                + "\n\nSet real secrets in your .env file before running in production."
+                " See docs/PRODUCTION_RUNBOOK.md for guidance."
+            )
 
 
 @lru_cache(maxsize=1)

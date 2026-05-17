@@ -1,11 +1,15 @@
 version: "3.9"
 
+# ── Profile notes ──────────────────────────────────────────────────────────────
+# Default profile starts: api, chromadb, admin
+# To include Neo4j:  docker compose --profile neo4j up -d
+
 services:
   chromadb:
     image: chromadb/chroma:latest
     container_name: regenova_chromadb
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"   # Bind to loopback — not exposed publicly
     volumes:
       - chroma_data:/chroma/chroma
     environment:
@@ -17,26 +21,29 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 20s
 
   neo4j:
+    profiles: [neo4j]        # Only starts with: docker compose --profile neo4j up
     image: neo4j:5
     container_name: regenova_neo4j
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "127.0.0.1:7474:7474"  # Bind to loopback — expose via reverse proxy if needed
+      - "127.0.0.1:7687:7687"
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
     environment:
-      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-changeme}
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set in .env}
       - NEO4J_PLUGINS=["apoc"]
       - NEO4J_dbms_security_procedures_unrestricted=apoc.*
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD:-changeme}", "RETURN 1"]
+      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD}", "RETURN 1"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
 
   api:
     build:
@@ -44,9 +51,9 @@ services:
       dockerfile: apps/api/Dockerfile
     container_name: regenova_api
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"  # Bind to loopback — expose publicly via reverse proxy
       # Prescriber-facing SPA is available at http://localhost:8000/app
-      # API docs are available at http://localhost:8000/docs
+      # API docs: http://localhost:8000/docs (set ENABLE_DOCS=false in production)
     env_file:
       - .env
     environment:
@@ -64,16 +71,18 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
   admin:
-    # Developer admin dashboard — Streamlit GUI
-    # Available at http://localhost:8501
+    # Operator admin dashboard — Streamlit GUI
+    # ⚠ NEVER expose port 8501 directly to the public internet.
+    # Access via SSH tunnel:  ssh -L 8501:localhost:8501 user@your-server
     build:
       context: .
       dockerfile: apps/admin/Dockerfile
     container_name: regenova_admin
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"  # Bind to loopback — access via SSH tunnel only
     env_file:
       - .env
     environment:
@@ -82,6 +91,12 @@ services:
       api:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # NOTE: For local dev, Neo4j Browser is available at http://localhost:7474
   # ChromaDB REST API is available at http://localhost:8001/api/v1/
