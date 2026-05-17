@@ -8,12 +8,23 @@ from __future__ import annotations
 
 import logging
 import pickle
+import sys
 from pathlib import Path
+
+def _ensure_repo_root_on_path() -> None:
+    repo_root = str(Path(__file__).resolve().parents[1])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+
+if __package__ in (None, ""):
+    _ensure_repo_root_on_path()
+
+from pipelines.common.chroma import CHROMA_COLLECTION_NAME, get_collection
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-CHROMA_COLLECTION_NAME = "regenova_intel_chunks"
 CHROMA_PERSIST_DIR = Path("./data/chroma_db")
 GRAPH_PKL_PATH = Path("./data/processed/graph.pkl")
 
@@ -25,14 +36,8 @@ def init_chromadb() -> bool:
         True if successful, False if ChromaDB unavailable.
     """
     try:
-        import chromadb  # type: ignore[import]
-
         CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-        client = chromadb.PersistentClient(path=str(CHROMA_PERSIST_DIR))
-        collection = client.get_or_create_collection(
-            name=CHROMA_COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
-        )
+        collection = get_collection(str(CHROMA_PERSIST_DIR), CHROMA_COLLECTION_NAME)
         logger.info(
             "✓ ChromaDB collection '%s' ready (count=%d)",
             CHROMA_COLLECTION_NAME,

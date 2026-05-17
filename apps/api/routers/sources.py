@@ -25,11 +25,10 @@ from pydantic import BaseModel, Field
 
 from apps.api.config import Settings, get_settings
 from apps.api.services.audit_store import AuditStore
+from pipelines.common.chroma import CHROMA_COLLECTION_NAME, get_collection
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Sources & Chunks"])
-
-_CHROMA_COLLECTION = "regenova_intel_chunks"
 
 # Regex that chunk_ids and document_ids must match before use in file paths.
 _SAFE_ID_RE = re.compile(r'^[\w\-:.]+$')
@@ -96,12 +95,7 @@ def _get_audit_store(request: Request) -> AuditStore:
 def _get_collection(settings: Settings) -> Any:
     """Return the ChromaDB collection, raising 503 if unavailable."""
     try:
-        import chromadb  # type: ignore[import]
-        client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
-        return client.get_or_create_collection(
-            name=_CHROMA_COLLECTION,
-            metadata={"hnsw:space": "cosine"},
-        )
+        return get_collection(settings.chroma_persist_dir, CHROMA_COLLECTION_NAME)
     except Exception as exc:
         logger.error("ChromaDB unavailable: %s", exc)
         raise HTTPException(

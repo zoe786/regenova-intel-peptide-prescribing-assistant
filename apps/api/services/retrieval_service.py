@@ -13,10 +13,9 @@ import logging
 from typing import Any
 
 from apps.api.schemas.source import NormalizedChunk, SourceMetadata
+from pipelines.common.chroma import CHROMA_COLLECTION_NAME, get_collection
 
 logger = logging.getLogger(__name__)
-
-CHROMA_COLLECTION_NAME = "regenova_intel_chunks"
 
 
 class RetrievalService:
@@ -45,13 +44,7 @@ class RetrievalService:
             RuntimeError: If ChromaDB cannot be initialised.
         """
         try:
-            import chromadb  # type: ignore[import]
-
-            self._client = chromadb.PersistentClient(path=self.chroma_persist_dir)
-            self._collection = self._client.get_or_create_collection(
-                name=CHROMA_COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"},
-            )
+            self._collection = get_collection(self.chroma_persist_dir, CHROMA_COLLECTION_NAME)
             logger.info(
                 "Connected to ChromaDB at %s, collection=%s, count=%d",
                 self.chroma_persist_dir,
@@ -121,7 +114,7 @@ class RetrievalService:
                         source_name=meta.get("source_name", "Unknown Source"),
                         source_url=meta.get("source_url"),
                         acquired_at=meta.get("acquired_at", "2024-01-01T00:00:00"),
-                        published_at=meta.get("published_at"),
+                        published_at=meta.get("published_at") or None,
                         evidence_tier_default=int(meta.get("evidence_tier_default", 3)),
                         jurisdiction=meta.get("jurisdiction"),
                         content_hash=meta.get("content_hash", ""),

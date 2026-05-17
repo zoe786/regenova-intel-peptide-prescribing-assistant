@@ -6,8 +6,20 @@ Runs all ingestors, captures results, and prints a summary table.
 from __future__ import annotations
 
 import logging
+import sys
 import time
-from dataclasses import dataclass
+from pathlib import Path
+
+
+def _ensure_repo_root_on_path() -> None:
+    """Ensure absolute imports work when script is executed by file path."""
+    repo_root = str(Path(__file__).resolve().parents[1])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+
+if __package__ in (None, ""):
+    _ensure_repo_root_on_path()
 
 logger = logging.getLogger(__name__)
 
