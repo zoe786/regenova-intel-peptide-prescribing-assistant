@@ -745,6 +745,7 @@ elif page == "⚙️ Config":
     safe_vars = {
         "API_BASE_URL":                   API_BASE_URL,
         "LLM_MODEL":                      os.getenv("LLM_MODEL", "gpt-4o"),
+        "LLM_BASE_URL":                   os.getenv("LLM_BASE_URL", ""),
         "VECTOR_DB_BACKEND":              os.getenv("VECTOR_DB_BACKEND", "chroma"),
         "ENVIRONMENT":                    os.getenv("ENVIRONMENT", "development"),
         "ENABLE_GRAPH_RETRIEVAL":         os.getenv("ENABLE_GRAPH_RETRIEVAL", "false"),

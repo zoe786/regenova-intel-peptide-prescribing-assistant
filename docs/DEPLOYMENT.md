@@ -68,7 +68,9 @@ Services started:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | Yes | — | OpenAI API key |
+| `LLM_API_KEY` | Yes | — | LLM provider API key (DeepSeek/OpenAI compatible) |
+| `LLM_BASE_URL` | No | — | OpenAI-compatible provider base URL |
+| `OPENAI_API_KEY` | Legacy | — | Backward-compatible fallback API key |
 | `LLM_MODEL` | No | `gpt-4o` | LLM model name |
 | `LLM_TEMPERATURE` | No | `0.1` | LLM temperature |
 | `VECTOR_DB_BACKEND` | No | `chroma` | Vector store backend |
