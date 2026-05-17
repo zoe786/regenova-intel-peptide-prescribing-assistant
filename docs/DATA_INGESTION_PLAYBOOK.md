@@ -120,7 +120,7 @@ To run all ingestors in sequence with a summary report:
 ```bash
 make ingest-all
 # or directly:
-python pipelines/run_all_ingestion.py
+python -m pipelines.run_all_ingestion
 ```
 
 Output:

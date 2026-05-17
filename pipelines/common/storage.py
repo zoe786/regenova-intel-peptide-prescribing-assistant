@@ -14,10 +14,9 @@ import logging
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from pipelines.common.chroma import CHROMA_COLLECTION_NAME, get_collection
 
-CHROMA_COLLECTION_NAME = "regenova_intel_chunks"
-_EMBEDDING_MODEL = "text-embedding-3-small"  # TODO: make configurable
+logger = logging.getLogger(__name__)
 
 
 def save_normalized(record: Any, output_dir: Path) -> Path:
@@ -121,12 +120,9 @@ def save_to_vector_store(
         return 0
 
     try:
-        import chromadb  # type: ignore[import]
-
-        client = chromadb.PersistentClient(path=chroma_persist_dir)
-        collection = client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"},
+        collection = get_collection(
+            chroma_persist_dir=chroma_persist_dir,
+            collection_name=collection_name,
         )
 
         ids: list[str] = []
@@ -141,7 +137,7 @@ def save_to_vector_store(
                 "source_name": chunk.source_name,
                 "source_url": chunk.source_url or "",
                 "acquired_at": chunk.acquired_at.isoformat() if hasattr(chunk.acquired_at, "isoformat") else str(chunk.acquired_at),
-                "published_at": chunk.published_at.isoformat() if chunk.published_at and hasattr(chunk.published_at, "isoformat") else "",
+                "published_at": chunk.published_at.isoformat() if chunk.published_at and hasattr(chunk.published_at, "isoformat") else None,
                 "evidence_tier_default": chunk.evidence_tier_default,
                 "jurisdiction": chunk.jurisdiction or "",
                 "content_hash": chunk.content_hash,

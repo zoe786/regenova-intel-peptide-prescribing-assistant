@@ -161,7 +161,7 @@ Streamlit single-page app with navigation sidebar. Pages:
 ### Ingestion Flow
 
 1. Operator places source files in `data/raw/<type>/`
-2. `make ingest-all` triggers `pipelines/run_all_ingestion.py`
+2. `make ingest-all` triggers `python -m pipelines.run_all_ingestion`
 3. Each ingestor reads, cleans, chunks, and enriches metadata
 4. Normalized JSON saved to `data/processed/normalized/`
 5. `common/storage.save_to_vector_store()` embeds chunks and upserts to ChromaDB

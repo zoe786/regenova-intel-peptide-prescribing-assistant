@@ -45,9 +45,9 @@ def check_normalized_dir():
 # ── Check 2: ChromaDB accessible ──────────────────────────────────────────────
 def check_chromadb():
     try:
-        import chromadb  # type: ignore[import]
-        client = chromadb.PersistentClient(path="./data/chroma_db")
-        collection = client.get_or_create_collection("regenova_intel_chunks")
+        from pipelines.common.chroma import CHROMA_COLLECTION_NAME, get_collection
+
+        collection = get_collection("./data/chroma_db", CHROMA_COLLECTION_NAME)
         count = collection.count()
         return True, f"ChromaDB accessible, collection count={count}"
     except ImportError:

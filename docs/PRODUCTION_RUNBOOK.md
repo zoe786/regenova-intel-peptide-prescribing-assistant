@@ -160,7 +160,7 @@ Place raw source files in `data/raw/<type>/` (see `docs/DATA_INGESTION_PLAYBOOK.
 
 ```bash
 # Inside the API container
-docker compose exec api python pipelines/run_all_ingestion.py
+docker compose exec api python -m pipelines.run_all_ingestion
 
 # or via Make on the host (if Python env is set up)
 make ingest-all
