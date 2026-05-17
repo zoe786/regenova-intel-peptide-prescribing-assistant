@@ -20,7 +20,7 @@ REGENOVA-Intel is an evidence-tiered AI assistant for peptide prescribing decisi
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        CLIENT LAYER                             │
-│          Streamlit Admin UI  │  External API Consumers          │
+│          Streamlit Admin UI  │  Clinician Chat UI  │  External API Consumers │
 └──────────────────┬──────────────────────┬───────────────────────┘
                    │                      │
 ┌──────────────────▼──────────────────────▼───────────────────────┐
@@ -72,14 +72,21 @@ make run-api
 # Docs at http://localhost:8000/docs
 ```
 
-### 4. Run Admin UI
+### 4. Run Clinician UI
+
+```bash
+make run-clinician
+# Clinician chat UI available at http://localhost:8502
+```
+
+### 5. Run Admin UI
 
 ```bash
 make run-admin
-# UI available at http://localhost:8501
+# Admin dashboard available at http://localhost:8501
 ```
 
-### 5. Ingest Data
+### 6. Ingest Data
 
 Place source files in `data/raw/` subdirectories, then:
 
@@ -150,6 +157,39 @@ curl -X POST http://localhost:8000/chat \
   "request_id": "uuid",
   "latency_ms": 1250
 }
+```
+
+---
+
+## Clinician UI
+
+A compact, end-user chat interface for clinicians is available at `http://localhost:8502`.
+It is optimised for use in a small panel or floating window alongside another clinical application.
+
+**Features:**
+
+- Focused single-page chat transcript with sticky message composer
+- Confidence badge (High / Medium / Low) on every response
+- Compact citation pill strip with expandable evidence detail and evidence-tier badges
+- Safety flags rendered inline with severity colour coding (critical / warning / info)
+- Backend availability indicator in the header
+- Clinical disclaimer always visible
+
+**Start:**
+
+```bash
+make run-clinician
+# http://localhost:8502
+```
+
+**Configuration:**
+
+| Variable       | Default                    | Description                    |
+|----------------|----------------------------|--------------------------------|
+| `API_BASE_URL` | `http://localhost:8000`    | FastAPI backend base URL       |
+
+```bash
+API_BASE_URL=http://my-server:8000 make run-clinician
 ```
 
 ---

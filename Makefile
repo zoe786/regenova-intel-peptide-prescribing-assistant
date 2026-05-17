@@ -1,4 +1,4 @@
-.PHONY: install run-api run-admin ingest-all reindex smoke-test test lint docker-up docker-down bootstrap clean
+.PHONY: install run-api run-admin run-clinician ingest-all reindex smoke-test test lint docker-up docker-down bootstrap clean
 
 PYTHON := python
 PIP := pip
@@ -13,6 +13,9 @@ run-api:
 
 run-admin:
 	$(STREAMLIT) run apps/admin/streamlit_app.py --server.port 8501
+
+run-clinician:
+	$(STREAMLIT) run apps/clinician/streamlit_app.py --server.port 8502
 
 ingest-all:
 	$(PYTHON) -m pipelines.run_all_ingestion
