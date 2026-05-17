@@ -1,0 +1,65 @@
+# REGENOVA-Intel — Caddy reverse-proxy configuration example
+# ────────────────────────────────────────────────────────────
+# Caddy automatically provisions and renews TLS certificates via Let's Encrypt.
+#
+# Usage:
+#   1. Install Caddy: https://caddyserver.com/docs/install
+#   2. Copy this file to /etc/caddy/Caddyfile (or wherever Caddy reads it)
+#   3. Replace <YOUR_DOMAIN> with your actual domain, e.g.  app.example.com
+#   4. Reload:  sudo systemctl reload caddy
+#
+# Prerequisites:
+#   - Port 80 and 443 open in your firewall
+#   - DNS A-record for <YOUR_DOMAIN> pointing to this server
+#   - docker-compose services running on 127.0.0.1 (the default docker-compose.yml)
+
+# ── Public prescriber-facing API + SPA ────────────────────────────────────────
+<YOUR_DOMAIN> {
+    encode gzip
+
+    # Block direct access to the API docs in production.
+    # Remove this block if you intentionally want the Swagger UI public.
+    @docs_paths path /docs /redoc /openapi.json
+    respond @docs_paths 404
+
+    # Proxy everything else to the FastAPI container
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Real-IP {remote_host}
+        # Pass the original host header
+        header_up Host {host}
+    }
+
+    # Optional: serve the prescriber SPA from a subdirectory
+    # The FastAPI app already mounts it at /app, so this is automatic.
+
+    # Security headers (Caddy adds them; FastAPI also sets them, belt-and-braces)
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server  # Remove Server header
+    }
+}
+
+# ── Admin dashboard — NEVER expose this publicly ──────────────────────────────
+# Access the admin UI via SSH tunnel instead:
+#   ssh -L 8501:localhost:8501 user@<YOUR_DOMAIN>
+#   Then open:  http://localhost:8501
+#
+# If you MUST expose it over HTTPS (not recommended), restrict by IP:
+#
+# admin.<YOUR_DOMAIN> {
+#     # Replace with your office/VPN IP range(s)
+#     @blocked not remote_ip 1.2.3.4/32 10.0.0.0/8
+#     respond @blocked 403
+#
+#     reverse_proxy 127.0.0.1:8501
+#
+#     header {
+#         Strict-Transport-Security "max-age=63072000"
+#         X-Frame-Options DENY
+#         -Server
+#     }
+# }

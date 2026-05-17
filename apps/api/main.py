@@ -9,9 +9,9 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,8 +19,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from apps.api.config import get_settings
-from apps.api.routers import chat, health, ingest
-from apps.api.routers import upload, sources, audit as audit_router
+from apps.api.routers import audit as audit_router
+from apps.api.routers import chat, health, ingest, sources, upload
 from apps.api.services.audit_store import AuditStore
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.chroma_persist_dir,
     )
 
+    # Block startup if insecure default secrets are used in production
+    try:
+        settings.validate_for_production()
+    except ValueError as exc:
+        logger.critical("STARTUP BLOCKED — insecure defaults detected:\n%s", exc)
+        raise SystemExit(1) from exc
+
     # Initialise shared audit store
     app.state.audit_store = AuditStore(db_path=settings.audit_db_path)
     logger.info("AuditStore ready at %s", settings.audit_db_path)
@@ -70,9 +77,9 @@ def create_app() -> FastAPI:
         description=_APP_DESCRIPTION,
         version=_APP_VERSION,
         lifespan=lifespan,
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if settings.enable_docs else None,
+        redoc_url="/redoc" if settings.enable_docs else None,
+        openapi_url="/openapi.json" if settings.enable_docs else None,
     )
 
     # ── CORS Middleware ────────────────────────────────────────────────────
@@ -93,6 +100,21 @@ def create_app() -> FastAPI:
         response: Response = await call_next(request)  # type: ignore[operator]
         response.headers["X-Decision-Support-Only"] = "true"
         response.headers["X-Request-ID"] = str(uuid.uuid4())
+        return response
+
+    # ── Security Headers Middleware ────────────────────────────────────────
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next: object) -> Response:
+        """Add browser-security headers to every response."""
+        response: Response = await call_next(request)  # type: ignore[operator]
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if settings.environment == "production":
+            # Only meaningful when served over HTTPS
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains; preload"
+            )
         return response
 
     # ── Request Timing Middleware ──────────────────────────────────────────
