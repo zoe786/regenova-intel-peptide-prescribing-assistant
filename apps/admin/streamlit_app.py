@@ -461,11 +461,41 @@ elif page == "📚 Source Manager":
                 acquired  = str(src.get("acquired_at", ""))[:19]
                 chunk_cnt = src.get("chunk_count", 0)
                 url       = src.get("source_url")
+                quality_status = src.get("extraction_quality_status", "ok")
+                extraction_warnings = src.get("extraction_warnings", []) or []
+                extraction_method = src.get("extraction_method") or "default"
+                warning_badge = "🟢" if quality_status == "ok" else ("🟡" if quality_status == "warning" else "🔴")
 
-                with st.expander(f"**{name}** · {src_type} · Tier {tier} · {chunk_cnt} chunks · {acquired}"):
+                with st.expander(
+                    f"{warning_badge} **{name}** · {src_type} · Tier {tier} · {chunk_cnt} chunks · {acquired}"
+                ):
                     st.code(f"Document ID: {doc_id}", language=None)
                     if url:
                         st.markdown(f"🔗 [{url}]({url})")
+                    st.caption(
+                        f"Extraction: `{extraction_method}` · "
+                        f"Chunking: `{src.get('chunking_strategy') or 'token'}`"
+                    )
+                    if extraction_warnings:
+                        st.warning("Quality warnings: " + ", ".join(extraction_warnings))
+                    preview_raw = src.get("extraction_preview_raw")
+                    preview_clean = src.get("extraction_preview_clean")
+                    if preview_raw:
+                        with st.expander("Raw extraction preview", expanded=False):
+                            st.text_area(
+                                "Raw extracted text sample",
+                                preview_raw,
+                                height=120,
+                                key=f"preview_raw_{doc_id}",
+                            )
+                    if preview_clean:
+                        with st.expander("Cleaned extraction preview", expanded=False):
+                            st.text_area(
+                                "Cleaned text sample",
+                                preview_clean,
+                                height=120,
+                                key=f"preview_clean_{doc_id}",
+                            )
 
                     if st.button("🔍 View chunks", key=f"view_{doc_id}"):
                         st.session_state[f"view_src_{doc_id}"] = True
@@ -559,6 +589,11 @@ elif page == "🔍 Chunk Explorer":
 
             with st.expander(f"`{cid[:40]}…` — **{name}** · Tier {tier}"):
                 st.markdown(f"**Snippet:** {snip}")
+                quality = chunk.get("extraction_quality_status")
+                if quality and quality != "ok":
+                    st.caption(f"⚠️ Extraction quality: {quality}")
+                if chunk.get("chunking_strategy"):
+                    st.caption(f"Chunking: `{chunk['chunking_strategy']}`")
 
                 if st.button("📄 Load full content", key=f"full_{cid}"):
                     full = api_get(f"/chunks/{cid}")

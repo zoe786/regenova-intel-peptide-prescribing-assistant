@@ -186,7 +186,24 @@ async def list_sources(
                     "evidence_tier_default": tier,
                     "acquired_at": meta.get("acquired_at"),
                     "chunk_count": 0,
+                    "extraction_method": meta.get("extraction_method"),
+                    "extraction_quality_status": meta.get("extraction_quality_status") or "ok",
+                    "extraction_warnings": [],
+                    "extraction_preview_raw": meta.get("extraction_preview_raw"),
+                    "extraction_preview_clean": meta.get("extraction_preview_clean"),
+                    "chunking_strategy": meta.get("chunking_strategy"),
                 }
+                warnings_raw = meta.get("extraction_warnings_json")
+                if warnings_raw:
+                    if isinstance(warnings_raw, list):
+                        docs[doc_id]["extraction_warnings"] = warnings_raw
+                    elif isinstance(warnings_raw, str):
+                        try:
+                            parsed = json.loads(warnings_raw)
+                            if isinstance(parsed, list):
+                                docs[doc_id]["extraction_warnings"] = parsed
+                        except (json.JSONDecodeError, TypeError):
+                            docs[doc_id]["extraction_warnings"] = [warnings_raw]
             docs[doc_id]["chunk_count"] += 1
 
         sorted_docs = sorted(docs.values(), key=lambda d: d["acquired_at"] or "", reverse=True)
@@ -346,6 +363,8 @@ async def list_chunks(
                 "evidence_tier_default": int(meta.get("evidence_tier_default", 3)),
                 "acquired_at": meta.get("acquired_at"),
                 "snippet": doc[:200] + ("\u2026" if len(doc) > 200 else ""),
+                "extraction_quality_status": meta.get("extraction_quality_status") or "ok",
+                "chunking_strategy": meta.get("chunking_strategy"),
             })
 
         return {

@@ -11,14 +11,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from pipelines.common.cleaners import normalize_whitespace, remove_boilerplate
 from pipelines.common.chunking import chunk_by_tokens
+from pipelines.common.cleaners import normalize_whitespace, remove_boilerplate
 from pipelines.common.metadata_enrichment import (
     compute_content_hash,
     generate_document_id,
-    infer_evidence_tier,
 )
 from pipelines.common.models import IngestionResult, NormalizedRecord, RawDocument
+from pipelines.common.pdf_processing import chunk_pdf_pages_layout, extract_pdf_content
 from pipelines.common.storage import save_normalized, save_to_vector_store
 
 logger = logging.getLogger(__name__)
@@ -49,35 +49,36 @@ class DocumentIngestor:
         self.max_tokens = max_tokens_per_chunk
         self.overlap = chunk_overlap
 
-    def _read_file(self, path: Path) -> str:
-        """Read file content, handling PDF extraction if available.
-
-        Args:
-            path: Path to the file.
-
-        Returns:
-            Raw text content of the file.
-        """
+    def _read_file(self, path: Path) -> tuple[str, dict]:
+        """Read file content and return text with optional extraction diagnostics."""
         suffix = path.suffix.lower()
 
         if suffix == ".pdf":
-            try:
-                import pypdf  # type: ignore[import]
-                reader = pypdf.PdfReader(str(path))
-                pages = [page.extract_text() or "" for page in reader.pages]
-                return "\n\n".join(pages)
-            except ImportError:
-                logger.warning("pypdf not installed — reading PDF as text fallback")
-            except Exception as e:
-                logger.error("Failed to read PDF %s: %s", path, e)
-                return ""
+            extraction = extract_pdf_content(str(path), ocr_fallback=True)
+            quality = extraction["quality"]
+            metadata = {
+                "extraction_method": extraction["extraction_method"],
+                "extraction_quality_status": quality["quality_status"],
+                "extraction_warnings_json": extraction["warnings"],
+                "pdf_page_count": extraction["page_count"],
+                "pdf_alpha_ratio": quality["alpha_ratio"],
+                "pdf_weird_char_ratio": quality["weird_char_ratio"],
+                "pdf_chars_per_page": quality["chars_per_page"],
+                "ocr_attempted": extraction["ocr_attempted"],
+                "ocr_used": extraction["ocr_used"],
+                "ocr_available": extraction["ocr_available"],
+                "extraction_preview_raw": extraction["raw_preview"],
+                "extraction_preview_clean": extraction["clean_preview"],
+                "_pdf_pages_cleaned": extraction["cleaned_pages"],
+            }
+            return extraction["cleaned_text"], metadata
 
         # TXT / MD
         try:
-            return path.read_text(encoding="utf-8", errors="replace")
+            return path.read_text(encoding="utf-8", errors="replace"), {}
         except Exception as e:
             logger.error("Failed to read file %s: %s", path, e)
-            return ""
+            return "", {}
 
     def load_raw(self) -> list[RawDocument]:
         """Discover and load all supported files from raw_dir.
@@ -96,7 +97,7 @@ class DocumentIngestor:
             if path.name.startswith("."):
                 continue
 
-            raw_content = self._read_file(path)
+            raw_content, extraction_meta = self._read_file(path)
             if not raw_content.strip():
                 logger.warning("Empty content in file: %s", path)
                 continue
@@ -108,7 +109,8 @@ class DocumentIngestor:
                 acquired_at=datetime.utcnow(),
                 source_url=None,
                 evidence_tier_default=DEFAULT_EVIDENCE_TIER,
-                file_path=str(path),
+                file_path=str(path.relative_to(self.raw_dir)),
+                extra_metadata=extraction_meta,
             )
             docs.append(doc)
             logger.info("Loaded document: %s (%d chars)", path.name, len(raw_content))
@@ -129,17 +131,55 @@ class DocumentIngestor:
 
         for doc in docs:
             try:
-                clean_text = normalize_whitespace(remove_boilerplate(doc.raw_content))
+                is_pdf = bool(doc.file_path and Path(doc.file_path).suffix.lower() == ".pdf")
+                extraction_status = str(doc.extra_metadata.get("extraction_quality_status", "ok"))
+                if is_pdf and extraction_status == "rejected":
+                    result.skipped += 1
+                    result.errors.append(
+                        f"Quarantined low-quality PDF extraction for {doc.source_name}: "
+                        f"{doc.extra_metadata.get('extraction_warnings_json', [])}"
+                    )
+                    continue
+
+                if is_pdf:
+                    cleaned_pages = doc.extra_metadata.get("_pdf_pages_cleaned") or []
+                    chunks = chunk_pdf_pages_layout(
+                        cleaned_pages,
+                        max_tokens=self.max_tokens,
+                        overlap=self.overlap,
+                    )
+                    clean_text = doc.raw_content.strip()
+                else:
+                    clean_text = normalize_whitespace(remove_boilerplate(doc.raw_content))
+                    chunks = chunk_by_tokens(clean_text, self.max_tokens, self.overlap)
+
                 if not clean_text:
                     result.skipped += 1
                     continue
 
-                chunks = chunk_by_tokens(clean_text, self.max_tokens, self.overlap)
-                document_id = generate_document_id(doc.source_url, doc.acquired_at, doc.source_name)
+                document_id = generate_document_id(
+                    doc.source_url,
+                    doc.acquired_at,
+                    doc.source_name,
+                    file_path=doc.file_path,
+                )
+                if not chunks:
+                    result.skipped += 1
+                    continue
 
                 for idx, chunk_text in enumerate(chunks):
                     content_hash = compute_content_hash(chunk_text)
                     chunk_id = f"{document_id}_{idx:04d}"
+                    chunk_extra_metadata = {
+                        key: value
+                        for key, value in doc.extra_metadata.items()
+                        if not key.startswith("_")
+                    }
+                    if idx == 0 and clean_text:
+                        chunk_extra_metadata["document_clean_preview"] = clean_text[:1200]
+                    chunk_extra_metadata["chunking_strategy"] = (
+                        "pdf_layout" if is_pdf else "token"
+                    )
                     record = NormalizedRecord(
                         chunk_id=chunk_id,
                         document_id=document_id,
@@ -152,6 +192,7 @@ class DocumentIngestor:
                         content_hash=content_hash,
                         content=chunk_text,
                         chunk_index=idx,
+                        extra_metadata=chunk_extra_metadata,
                     )
                     save_normalized(record, self.output_dir)
                     records.append(record)

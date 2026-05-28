@@ -101,7 +101,7 @@ make ingest-all
 | Source Type | Directory | Evidence Tier | Notes |
 |-------------|-----------|---------------|-------|
 | PubMed abstracts | `data/raw/pubmed/pmids.txt` | Tier 1 | High-quality peer-reviewed |
-| Clinical documents | `data/raw/documents/` | Tier 2 | PDF/TXT/MD files |
+| Clinical documents | `data/raw/documents/` | Tier 2 | PDF/TXT/MD files (PDF quality checks + OCR fallback when available) |
 | Websites | `data/raw/websites/urls.txt` | Tier 3 | URL list, fetched at ingest |
 | YouTube transcripts | `data/raw/youtube/video_ids.txt` | Tier 3 | Video ID list |
 | Skool courses | `data/raw/skool/courses/` | Tier 3 | Exported JSON/HTML |

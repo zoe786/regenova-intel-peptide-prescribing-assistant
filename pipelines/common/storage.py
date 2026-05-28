@@ -19,6 +19,13 @@ from pipelines.common.chroma import CHROMA_COLLECTION_NAME, get_collection
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_metadata_value(value: Any) -> Any:
+    """Coerce metadata values into Chroma-friendly scalar representations."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
 def save_normalized(record: Any, output_dir: Path) -> Path:
     """Save a NormalizedRecord to a JSON file in the output directory.
 
@@ -48,6 +55,7 @@ def save_normalized(record: Any, output_dir: Path) -> Path:
         "content_hash": record.content_hash,
         "content": record.content,
         "chunk_index": record.chunk_index,
+        "extra_metadata": dict(getattr(record, "extra_metadata", {}) or {}),
         "metadata": {
             "source_type": record.source_type,
             "source_name": record.source_name,
@@ -59,6 +67,7 @@ def save_normalized(record: Any, output_dir: Path) -> Path:
             "content_hash": record.content_hash,
             "document_id": record.document_id,
             "chunk_id": record.chunk_id,
+            **dict(getattr(record, "extra_metadata", {}) or {}),
         },
     }
 
@@ -143,6 +152,10 @@ def save_to_vector_store(
                 "content_hash": chunk.content_hash,
                 "document_id": chunk.document_id,
                 "chunk_id": chunk.chunk_id,
+                **{
+                    key: _sanitize_metadata_value(value)
+                    for key, value in (getattr(chunk, "extra_metadata", {}) or {}).items()
+                },
             })
 
         # Upsert in batches of 100 to avoid memory issues

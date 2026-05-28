@@ -10,7 +10,6 @@ import hashlib
 import logging
 import uuid
 from datetime import datetime
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +50,10 @@ def compute_content_hash(text: str) -> str:
 
 
 def generate_document_id(
-    source_url: Optional[str],
+    source_url: str | None,
     acquired_at: datetime,
     source_name: str = "",
+    file_path: str | None = None,
 ) -> str:
     """Generate a deterministic document ID from source URL and acquisition time.
 
@@ -71,6 +71,10 @@ def generate_document_id(
         # Deterministic ID based on URL (same URL always gives same ID)
         namespace = uuid.NAMESPACE_URL
         return str(uuid.uuid5(namespace, source_url))
+
+    if file_path:
+        normalized_file_path = file_path.replace("\\", "/").strip().lower()
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"file://{normalized_file_path}"))
 
     # Fallback: combine source_name and acquisition date for semi-determinism
     seed = f"{source_name}::{acquired_at.isoformat()}"
@@ -118,6 +122,7 @@ def enrich_metadata(raw_doc: object) -> dict:
         source_url=raw_doc.source_url,  # type: ignore[attr-defined]
         acquired_at=raw_doc.acquired_at,  # type: ignore[attr-defined]
         source_name=raw_doc.source_name,  # type: ignore[attr-defined]
+        file_path=getattr(raw_doc, "file_path", None),
     )
     tier = infer_evidence_tier(
         source_type=raw_doc.source_type,  # type: ignore[attr-defined]
