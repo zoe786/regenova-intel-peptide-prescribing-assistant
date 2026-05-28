@@ -71,6 +71,7 @@ class NormalizedRecord:
     published_at: Optional[datetime] = None
     jurisdiction: Optional[str] = None
     chunk_index: int = 0
+    extra_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
