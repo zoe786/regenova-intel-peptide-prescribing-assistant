@@ -26,7 +26,7 @@ def test_load_auth_config_from_file(tmp_path: Path, monkeypatch) -> None:
 
     config = _load_auth_config(raw_dir)
 
-    assert "example.com" in config
+    assert set(config) == {"example.com"}
     assert config["example.com"]["headers"]["Authorization"] == "******"
     assert config["example.com"]["cookies"]["sessionid"] == "xyz"
 

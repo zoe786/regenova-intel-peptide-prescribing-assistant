@@ -14,9 +14,16 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pipelines.common.cleaners import clean_html, normalize_whitespace, remove_boilerplate
 from pipelines.common.chunking import chunk_by_tokens
-from pipelines.common.metadata_enrichment import compute_content_hash, generate_document_id
+from pipelines.common.cleaners import (
+    clean_html,
+    normalize_whitespace,
+    remove_boilerplate,
+)
+from pipelines.common.metadata_enrichment import (
+    compute_content_hash,
+    generate_document_id,
+)
 from pipelines.common.models import IngestionResult, NormalizedRecord, RawDocument
 from pipelines.common.storage import save_normalized, save_to_vector_store
 
