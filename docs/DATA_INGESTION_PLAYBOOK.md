@@ -48,6 +48,25 @@ https://www.ncbi.nlm.nih.gov/pmc/articles/PMCXXXXXX/
 https://peptidesciences.com/bpc-157/
 ```
 
+For login-protected pages, optionally add:
+```
+data/raw/websites/auth.json
+```
+
+Format:
+```json
+{
+  "domains": {
+    "example.com": {
+      "headers": { "Authorization": "******" },
+      "cookies": { "sessionid": "<session-cookie>" }
+    }
+  }
+}
+```
+
+You can also provide the same JSON via `WEBSITE_INGEST_AUTH_JSON` env var.
+
 ### YouTube Transcripts (Tier 3)
 ```
 data/raw/youtube/video_ids.txt

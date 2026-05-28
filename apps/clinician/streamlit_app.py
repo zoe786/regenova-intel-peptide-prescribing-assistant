@@ -9,8 +9,10 @@ Environment variables:
 
 from __future__ import annotations
 
+import html
 import os
 import time
+from urllib.parse import urlparse
 
 import requests
 import streamlit as st
@@ -230,18 +232,32 @@ def _tier_badge(tier: int) -> str:
 
 
 def _safety_html(flag: dict) -> str:
-    sev = flag.get("severity", "info")
+    raw_sev = str(flag.get("severity", "info")).lower()
+    sev = raw_sev if raw_sev in {"critical", "warning", "info"} else "info"
     icon = {"critical": "🚨", "warning": "⚠️", "info": "ℹ️"}.get(sev, "ℹ️")
     cls = f"safety-{sev}"
-    code = flag.get("code", "")
-    msg = flag.get("message", "")
-    rationale = flag.get("rationale", "")
+    code = _escape_html(flag.get("code", ""))
+    msg = _escape_html(flag.get("message", ""))
+    rationale = _escape_html(flag.get("rationale", ""))
     return (
         f'<div class="{cls}">'
         f"<strong>{icon} {code}</strong> {msg}"
         + (f"<br><span style='font-size:.72rem;opacity:.85'>{rationale}</span>" if rationale else "")
         + "</div>"
     )
+
+
+def _escape_html(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _safe_external_url(url: object) -> str | None:
+    if not isinstance(url, str):
+        return None
+    parsed = urlparse(url.strip())
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return url
+    return None
 
 
 def _render_assistant_meta(meta: dict) -> None:
@@ -272,7 +288,7 @@ def _render_assistant_meta(meta: dict) -> None:
     if citations:
         pill_html = '<div class="citation-strip">'
         for c in citations:
-            name = c.get("source_name", "Source")
+            name = _escape_html(c.get("source_name", "Source"))
             pill_html += f'<span class="citation-pill">{name}</span>'
         pill_html += "</div>"
         st.markdown(pill_html, unsafe_allow_html=True)
@@ -280,10 +296,11 @@ def _render_assistant_meta(meta: dict) -> None:
         with st.expander(f"📚 Evidence sources ({len(citations)})", expanded=False):
             for i, c in enumerate(citations, 1):
                 tier = c.get("evidence_tier", 5)
-                name = c.get("source_name", "Unknown")
+                name = _escape_html(c.get("source_name", "Unknown"))
                 excerpt = c.get("excerpt", "")
-                url = c.get("url")
-                label = f"**{i}. {name}**" + (f" — [{c.get('source_id','')}]({url})" if url else f" — `{c.get('source_id','')}`")
+                url = _safe_external_url(c.get("url"))
+                source_id = _escape_html(c.get("source_id", ""))
+                label = f"**{i}. {name}**" + (f" — [{source_id}]({url})" if url else f" — `{source_id}`")
                 st.markdown(
                     f"{_tier_badge(tier)} &nbsp; {label}",
                     unsafe_allow_html=True,
@@ -334,7 +351,8 @@ if query:
                 data = resp.json()
                 elapsed = int((time.monotonic() - t0) * 1000)
             except requests.HTTPError as exc:
-                data = {"error": f"API error {exc.response.status_code}: {exc.response.text}"}
+                status_code = exc.response.status_code if exc.response is not None else "unknown"
+                data = {"error": f"API returned HTTP {status_code}"}
             except requests.RequestException as exc:
                 data = {"error": str(exc)}
 
