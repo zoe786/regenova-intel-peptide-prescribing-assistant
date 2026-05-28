@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import logging
 import math
 import re
@@ -77,33 +76,46 @@ def _extract_pdf_text_with_pypdf(path: str) -> tuple[list[str], list[str]]:
 
 def _extract_pdf_text_with_ocr(path: str, page_count_hint: int) -> tuple[list[str], bool, list[str]]:
     warnings: list[str] = []
+    missing_deps: list[str] = []
     try:
-        import pypdf  # type: ignore[import]
-        import pytesseract  # type: ignore[import]
-        from PIL import Image  # type: ignore[import]
+        import fitz  # type: ignore[import]
     except ImportError:
-        return [], False, ["ocr_unavailable"]
+        missing_deps.append("pymupdf")
+        fitz = None  # type: ignore[assignment]
+    try:
+        import pytesseract  # type: ignore[import]
+    except ImportError:
+        missing_deps.append("pytesseract")
+        pytesseract = None  # type: ignore[assignment]
+    try:
+        from PIL import Image as pil_image  # type: ignore[import]
+    except ImportError:
+        missing_deps.append("pillow")
+        pil_image = None  # type: ignore[assignment]
+
+    if missing_deps:
+        warnings.extend(f"ocr_dependency_missing_{dep}" for dep in missing_deps)
+        return [], False, warnings
 
     try:
-        reader = pypdf.PdfReader(path)
         pages: list[str] = []
-        for page in reader.pages:
-            page_text_parts: list[str] = []
-            page_images = list(getattr(page, "images", []))
-            for img_obj in page_images:
-                try:
-                    img = Image.open(io.BytesIO(img_obj.data))
-                    ocr_text = pytesseract.image_to_string(img)
-                    if ocr_text and ocr_text.strip():
-                        page_text_parts.append(ocr_text)
-                except Exception as image_exc:
-                    logger.debug("Skipping OCR for one PDF image in %s: %s", path, image_exc)
-            pages.append("\n".join(page_text_parts).strip())
+        zoom = 2.0  # ~144 DPI baseline rasterization for better OCR
+        matrix = fitz.Matrix(zoom, zoom)
+        with fitz.open(path) as pdf:
+            for page in pdf:
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+                mode = "RGB" if pix.n >= 3 else "L"
+                img = pil_image.frombytes(mode, (pix.width, pix.height), pix.samples)
+                ocr_text = pytesseract.image_to_string(img)
+                pages.append((ocr_text or "").strip())
 
         if not pages:
             pages = [""] * max(1, page_count_hint)
         return pages, True, warnings
     except Exception as exc:
+        if exc.__class__.__name__ == "TesseractNotFoundError":
+            logger.warning("OCR engine unavailable for %s: %s", path, exc)
+            return [], False, ["ocr_engine_unavailable"]
         logger.warning("OCR extraction failed for %s: %s", path, exc)
         return [], True, ["ocr_failed"]
 

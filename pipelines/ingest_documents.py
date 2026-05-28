@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from pipelines.common.chroma import CHROMA_COLLECTION_NAME, get_collection
 from pipelines.common.chunking import chunk_by_tokens
 from pipelines.common.cleaners import normalize_whitespace, remove_boilerplate
 from pipelines.common.metadata_enrichment import (
@@ -128,13 +129,33 @@ class DocumentIngestor:
         """
         result = IngestionResult(source_type=SOURCE_TYPE)
         records: list[NormalizedRecord] = []
+        replaced_document_ids: set[str] = set()
 
         for doc in docs:
             try:
                 is_pdf = bool(doc.file_path and Path(doc.file_path).suffix.lower() == ".pdf")
                 extraction_status = str(doc.extra_metadata.get("extraction_quality_status", "ok"))
+                document_id = generate_document_id(
+                    doc.source_url,
+                    doc.acquired_at,
+                    doc.source_name,
+                    file_path=doc.file_path,
+                )
+
+                if document_id not in replaced_document_ids:
+                    self._delete_existing_document_chunks(document_id)
+                    replaced_document_ids.add(document_id)
+
                 if is_pdf and extraction_status == "rejected":
                     result.skipped += 1
+                    quarantine_record = {
+                        "document_id": document_id,
+                        "source_name": doc.source_name,
+                        "file_path": doc.file_path,
+                        "extraction_method": doc.extra_metadata.get("extraction_method", "unknown"),
+                        "warnings": doc.extra_metadata.get("extraction_warnings_json", []),
+                    }
+                    result.quarantined_documents.append(quarantine_record)
                     result.errors.append(
                         f"Quarantined low-quality PDF extraction for {doc.source_name}: "
                         f"{doc.extra_metadata.get('extraction_warnings_json', [])}"
@@ -157,12 +178,6 @@ class DocumentIngestor:
                     result.skipped += 1
                     continue
 
-                document_id = generate_document_id(
-                    doc.source_url,
-                    doc.acquired_at,
-                    doc.source_name,
-                    file_path=doc.file_path,
-                )
                 if not chunks:
                     result.skipped += 1
                     continue
@@ -207,6 +222,40 @@ class DocumentIngestor:
             save_to_vector_store(records, chroma_persist_dir=self.chroma_persist_dir)
 
         return result
+
+    def _delete_existing_document_chunks(self, document_id: str) -> None:
+        """Remove existing chunks for a document to avoid stale data on re-ingest."""
+        try:
+            collection = get_collection(
+                chroma_persist_dir=self.chroma_persist_dir,
+                collection_name=CHROMA_COLLECTION_NAME,
+            )
+            existing = collection.get(where={"document_id": document_id}, include=["metadatas"])
+            existing_chunk_ids = existing.get("ids") or []
+            if existing_chunk_ids:
+                collection.delete(ids=existing_chunk_ids)
+                logger.info(
+                    "Deleted %d existing vector chunks for document_id=%s",
+                    len(existing_chunk_ids),
+                    document_id,
+                )
+        except Exception as exc:
+            logger.warning("Could not delete existing vector chunks for %s: %s", document_id, exc)
+            existing_chunk_ids = []
+
+        deleted_files = 0
+        candidate_paths = {self.output_dir / f"{chunk_id}.json" for chunk_id in existing_chunk_ids}
+        candidate_paths.update(self.output_dir.glob(f"{document_id}_*.json"))
+        for normalized_path in candidate_paths:
+            if normalized_path.exists():
+                normalized_path.unlink()
+                deleted_files += 1
+        if deleted_files:
+            logger.info(
+                "Deleted %d normalized chunk files for document_id=%s",
+                deleted_files,
+                document_id,
+            )
 
     def run(self) -> IngestionResult:
         """Run the full document ingestion pipeline.

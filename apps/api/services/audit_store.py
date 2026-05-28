@@ -61,6 +61,22 @@ CREATE INDEX IF NOT EXISTS idx_ingest_jobs_status     ON ingest_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_ingest_jobs_triggered  ON ingest_jobs(triggered_at);
 """
 
+_CREATE_PDF_QUARANTINE = """
+CREATE TABLE IF NOT EXISTS pdf_quarantine (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    quarantined_at    TEXT    NOT NULL,
+    job_id            TEXT,
+    document_id       TEXT    NOT NULL,
+    source_name       TEXT    NOT NULL DEFAULT '',
+    file_path         TEXT    NOT NULL DEFAULT '',
+    extraction_method TEXT    NOT NULL DEFAULT '',
+    warnings          TEXT    NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_pdf_quarantine_quarantined_at ON pdf_quarantine(quarantined_at);
+CREATE INDEX IF NOT EXISTS idx_pdf_quarantine_job_id ON pdf_quarantine(job_id);
+CREATE INDEX IF NOT EXISTS idx_pdf_quarantine_document_id ON pdf_quarantine(document_id);
+"""
+
 
 class AuditStore:
     """Thread-safe SQLite-backed audit store.
@@ -112,6 +128,7 @@ class AuditStore:
             try:
                 conn.executescript(_CREATE_AUDIT_EVENTS)
                 conn.executescript(_CREATE_INGEST_JOBS)
+                conn.executescript(_CREATE_PDF_QUARANTINE)
                 conn.commit()
             finally:
                 conn.close()
@@ -392,5 +409,65 @@ class AuditStore:
             except (json.JSONDecodeError, TypeError):
                 row_dict["results"] = {}
             return row_dict
+        finally:
+            conn.close()
+
+    # ── PDF Quarantine ────────────────────────────────────────────────────────
+
+    def log_pdf_quarantine_records(self, records: list[dict], job_id: str | None = None) -> int:
+        """Persist quarantined PDF diagnostics for admin visibility."""
+        if not records:
+            return 0
+
+        rows: list[tuple[str, str | None, str, str, str, str, str]] = []
+        now = self._now()
+        for record in records:
+            warnings = record.get("warnings") or []
+            if isinstance(warnings, str):
+                warnings = [warnings]
+            rows.append(
+                (
+                    now,
+                    job_id,
+                    str(record.get("document_id", "")),
+                    str(record.get("source_name", "")),
+                    str(record.get("file_path", "")),
+                    str(record.get("extraction_method", "")),
+                    json.dumps(warnings, default=str),
+                )
+            )
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.executemany(
+                    "INSERT INTO pdf_quarantine "
+                    "(quarantined_at, job_id, document_id, source_name, file_path, extraction_method, warnings) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return len(rows)
+
+    def list_pdf_quarantine_records(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        """Return persisted quarantined PDF records for admin/API display."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM pdf_quarantine "
+                "ORDER BY quarantined_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            items: list[dict] = []
+            for row in rows:
+                item = dict(row)
+                try:
+                    item["warnings"] = json.loads(item.get("warnings") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    item["warnings"] = []
+                items.append(item)
+            return items
         finally:
             conn.close()

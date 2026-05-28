@@ -137,6 +137,7 @@ async def list_sources(
     offset: int = 0,
     _: None = Depends(_require_admin_key),
     settings: Settings = Depends(get_settings),
+    audit_store: AuditStore = Depends(_get_audit_store),
 ) -> dict:
     """Aggregate ChromaDB collection by document_id to produce a source list."""
     collection = _get_collection(settings)
@@ -144,7 +145,13 @@ async def list_sources(
     try:
         total = collection.count()
         if total == 0:
-            return {"sources": [], "total": 0}
+            return {
+                "sources": [],
+                "total": 0,
+                "limit": limit,
+                "offset": offset,
+                "quarantined_documents": audit_store.list_pdf_quarantine_records(limit=50, offset=0),
+            }
 
         # Fetch metadata in batches of 500 to avoid unbounded memory usage
         PAGE = 500
@@ -214,6 +221,7 @@ async def list_sources(
             "total": len(sorted_docs),
             "limit": limit,
             "offset": offset,
+            "quarantined_documents": audit_store.list_pdf_quarantine_records(limit=50, offset=0),
         }
 
     except HTTPException:

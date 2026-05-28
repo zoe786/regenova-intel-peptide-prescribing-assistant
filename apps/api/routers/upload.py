@@ -13,8 +13,6 @@ All endpoints require X-Admin-Key header and log audit events.
 from __future__ import annotations
 
 import logging
-import shutil
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -105,6 +103,9 @@ def _ingest_documents_task(
             raw_dir=Path(raw_dir),
             chroma_persist_dir=chroma_persist_dir,
         ).run()
+        quarantined_documents = list(getattr(result, "quarantined_documents", []) or [])
+        if quarantined_documents:
+            audit_store.log_pdf_quarantine_records(quarantined_documents, job_id=job_id)
         audit_store.update_ingest_job(
             job_id,
             status="completed" if result.success else "failed",
@@ -112,6 +113,7 @@ def _ingest_documents_task(
             results={"documents": {
                 "count": result.count,
                 "errors": result.errors,
+                "quarantined_documents": quarantined_documents,
                 "duration_seconds": round(result.duration_seconds, 2),
             }},
             error=result.errors[0] if result.errors else None,

@@ -92,6 +92,9 @@ def _run_single_ingestion_task(
                 f"Could not load ingestor '{class_name}' from '{module_path}': {load_exc}"
             ) from load_exc
         result = ingestor_cls().run()
+        quarantined_documents = list(getattr(result, "quarantined_documents", []) or [])
+        if quarantined_documents:
+            audit_store.log_pdf_quarantine_records(quarantined_documents, job_id=job_id)
         audit_store.update_ingest_job(
             job_id,
             status="completed" if result.success else "failed",
@@ -99,6 +102,7 @@ def _run_single_ingestion_task(
             results={source_type: {
                 "count": result.count,
                 "errors": result.errors,
+                "quarantined_documents": quarantined_documents,
                 "duration_seconds": round(result.duration_seconds, 2),
             }},
             error=result.errors[0] if result.errors else None,

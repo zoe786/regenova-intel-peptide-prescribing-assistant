@@ -89,6 +89,7 @@ class IngestionResult:
     source_type: str
     count: int = 0
     errors: list[str] = field(default_factory=list)
+    quarantined_documents: list[dict] = field(default_factory=list)
     duration_seconds: float = 0.0
     skipped: int = 0
 
