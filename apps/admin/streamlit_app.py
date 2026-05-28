@@ -448,7 +448,24 @@ elif page == "📚 Source Manager":
     else:
         sources = data.get("sources", [])
         total   = data.get("total", 0)
+        quarantined_documents = data.get("quarantined_documents", []) or []
         st.metric("Total Sources", total)
+        if quarantined_documents:
+            st.warning(f"Quarantined PDFs: {len(quarantined_documents)}")
+            for item in quarantined_documents:
+                label = item.get("source_name") or item.get("file_path") or item.get("document_id")
+                with st.expander(f"🚫 Quarantined PDF · {label}", expanded=False):
+                    st.caption(
+                        f"At: {str(item.get('quarantined_at', ''))[:19]} · "
+                        f"Method: {item.get('extraction_method') or 'unknown'}"
+                    )
+                    if item.get("document_id"):
+                        st.code(f"Document ID: {item.get('document_id')}", language=None)
+                    if item.get("file_path"):
+                        st.text(f"File: {item.get('file_path')}")
+                    warnings = item.get("warnings") or []
+                    if warnings:
+                        st.error("Reasons: " + ", ".join(str(w) for w in warnings))
 
         if not sources:
             st.info("No sources found. Upload documents or register URLs first.")

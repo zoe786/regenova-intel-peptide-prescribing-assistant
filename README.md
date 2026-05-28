@@ -108,6 +108,12 @@ make ingest-all
 | Skool community | `data/raw/skool/community/` | Tier 4 | Exported JSON |
 | Forums | `data/raw/forums/` | Tier 4 | Scraped JSON |
 
+PDF OCR fallback uses page rasterization and is optional. For best scanned-PDF results, install:
+- `pymupdf`
+- `pytesseract`
+- `Pillow`
+- Tesseract OCR binary on the host (`tesseract --version`)
+
 ---
 
 ## Evidence Tiers
