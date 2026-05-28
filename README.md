@@ -102,7 +102,7 @@ make ingest-all
 |-------------|-----------|---------------|-------|
 | PubMed abstracts | `data/raw/pubmed/pmids.txt` | Tier 1 | High-quality peer-reviewed |
 | Clinical documents | `data/raw/documents/` | Tier 2 | PDF/TXT/MD files (PDF quality checks + OCR fallback when available) |
-| Websites | `data/raw/websites/urls.txt` | Tier 3 | URL list, fetched at ingest |
+| Websites | `data/raw/websites/urls.txt` | Tier 3 | URL list, fetched at ingest (supports optional auth profiles for login-protected pages) |
 | YouTube transcripts | `data/raw/youtube/video_ids.txt` | Tier 3 | Video ID list |
 | Skool courses | `data/raw/skool/courses/` | Tier 3 | Exported JSON/HTML |
 | Skool community | `data/raw/skool/community/` | Tier 4 | Exported JSON |
@@ -113,6 +113,22 @@ PDF OCR fallback uses page rasterization and is optional. For best scanned-PDF r
 - `pytesseract`
 - `Pillow`
 - Tesseract OCR binary on the host (`tesseract --version`)
+
+Website ingestion can optionally include authenticated fetch profiles by defining either:
+- `data/raw/websites/auth.json`
+- or `WEBSITE_INGEST_AUTH_JSON` in the environment
+
+Example:
+```json
+{
+  "domains": {
+    "example.com": {
+      "headers": { "Authorization": "******" },
+      "cookies": { "sessionid": "<session-cookie>" }
+    }
+  }
+}
+```
 
 ---
 

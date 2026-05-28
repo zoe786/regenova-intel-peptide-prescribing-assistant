@@ -796,7 +796,7 @@
           </div>
           <div class="citation-body">
             <div class="citation-excerpt">"${escHtml((c.excerpt ?? '').slice(0, 300))}${(c.excerpt ?? '').length > 300 ? '…' : ''}"</div>
-            ${c.url ? `<a class="citation-link" href="${escHtml(c.url)}" target="_blank" rel="noopener">🔗 View source</a>` : ''}
+            ${safeCitationUrl(c.url) ? `<a class="citation-link" href="${escHtml(safeCitationUrl(c.url))}" target="_blank" rel="noopener noreferrer">🔗 View source</a>` : ''}
           </div>
         </div>`;
       }).join('');
@@ -859,6 +859,18 @@
   function escHtml(str) {
     return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function safeCitationUrl(value) {
+    if (typeof value !== 'string') return '';
+    const raw = value.trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : '';
+    } catch (_) {
+      return '';
+    }
   }
 
   function shake(el) {

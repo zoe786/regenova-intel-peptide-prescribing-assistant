@@ -6,14 +6,24 @@ parses with BeautifulSoup, cleans, and chunks (evidence_tier_default=3).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from pipelines.common.cleaners import clean_html, normalize_whitespace, remove_boilerplate
 from pipelines.common.chunking import chunk_by_tokens
-from pipelines.common.metadata_enrichment import compute_content_hash, generate_document_id
+from pipelines.common.cleaners import (
+    clean_html,
+    normalize_whitespace,
+    remove_boilerplate,
+)
+from pipelines.common.metadata_enrichment import (
+    compute_content_hash,
+    generate_document_id,
+)
 from pipelines.common.models import IngestionResult, NormalizedRecord, RawDocument
 from pipelines.common.storage import save_normalized, save_to_vector_store
 
@@ -23,6 +33,59 @@ DEFAULT_EVIDENCE_TIER = 3
 SOURCE_TYPE = "website"
 REQUEST_TIMEOUT = 30
 REQUEST_DELAY = 1.0  # polite crawl delay in seconds
+AUTH_CONFIG_FILENAME = "auth.json"
+
+
+def _normalise_domain(hostname: str | None) -> str:
+    if not hostname:
+        return ""
+    return hostname.lower().strip().removeprefix("www.")
+
+
+def _safe_dict(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in value.items():
+        if isinstance(k, str) and isinstance(v, str):
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _load_auth_config(raw_dir: Path) -> dict[str, dict[str, dict[str, str]]]:
+    """Load optional auth profiles for login-protected sources.
+
+    Supports:
+    - data/raw/websites/auth.json
+    - WEBSITE_INGEST_AUTH_JSON env var (JSON string)
+    """
+    config: dict[str, object] = {}
+    auth_file = raw_dir / AUTH_CONFIG_FILENAME
+
+    if auth_file.exists():
+        try:
+            config = json.loads(auth_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Invalid website auth config file %s: %s", auth_file, exc)
+
+    env_json = os.getenv("WEBSITE_INGEST_AUTH_JSON")
+    if env_json:
+        try:
+            config = json.loads(env_json)
+        except Exception as exc:
+            logger.warning("Invalid WEBSITE_INGEST_AUTH_JSON payload: %s", exc)
+
+    domains_raw = config.get("domains", {}) if isinstance(config, dict) else {}
+    parsed_domains: dict[str, dict[str, dict[str, str]]] = {}
+    if isinstance(domains_raw, dict):
+        for domain, profile in domains_raw.items():
+            if not isinstance(domain, str) or not isinstance(profile, dict):
+                continue
+            parsed_domains[_normalise_domain(domain)] = {
+                "headers": _safe_dict(profile.get("headers")),
+                "cookies": _safe_dict(profile.get("cookies")),
+            }
+    return parsed_domains
 
 
 class WebsiteIngestor:
@@ -40,13 +103,22 @@ class WebsiteIngestor:
         self.chroma_persist_dir = chroma_persist_dir
         self.max_tokens = max_tokens_per_chunk
         self.urls_file = self.raw_dir / "urls.txt"
+        self.auth_profiles = _load_auth_config(self.raw_dir)
 
     def _fetch_url(self, url: str) -> str | None:
         """Fetch a URL and return the HTML content."""
         try:
             import httpx  # type: ignore[import]
+            parsed = urlparse(url)
+            host = _normalise_domain(parsed.hostname)
+            auth_profile = self.auth_profiles.get(host, {})
+            headers = {
+                "User-Agent": "REGENOVA-Intel/0.1 (research bot)",
+                **auth_profile.get("headers", {}),
+            }
+            cookies = auth_profile.get("cookies", {})
             with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
-                response = client.get(url, headers={"User-Agent": "REGENOVA-Intel/0.1 (research bot)"})
+                response = client.get(url, headers=headers, cookies=cookies)
                 response.raise_for_status()
                 return response.text
         except Exception as exc:

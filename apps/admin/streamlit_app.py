@@ -13,11 +13,14 @@ Streamlit application providing a full web GUI for developers:
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import os
+import secrets
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 import streamlit as st
@@ -26,6 +29,8 @@ import streamlit as st
 
 API_BASE_URL  = os.getenv("API_BASE_URL",  "http://localhost:8000")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "admin-dev-key")
+ADMIN_UI_PASSWORD = os.getenv("ADMIN_UI_PASSWORD", ADMIN_API_KEY)
+ADMIN_UI_REQUIRE_AUTH = os.getenv("ADMIN_UI_REQUIRE_AUTH", "true").strip().lower() in {"1", "true", "yes", "on"}
 PROCESSED_DIR = Path(os.getenv("PROCESSED_DATA_DIR", "./data/processed"))
 
 ADMIN_HEADERS = {"X-Admin-Key": ADMIN_API_KEY}
@@ -80,8 +85,43 @@ with st.sidebar:
     st.divider()
     st.caption("⚠️ Decision support only. Not medical advice.")
     st.caption(f"API: `{API_BASE_URL}`")
+    if ADMIN_UI_REQUIRE_AUTH:
+        st.divider()
+        st.markdown("### 🔐 Admin UI Access")
+        if "admin_ui_authenticated" not in st.session_state:
+            st.session_state.admin_ui_authenticated = False
+        if not st.session_state.admin_ui_authenticated:
+            pwd = st.text_input(
+                "Enter admin UI passphrase",
+                type="password",
+                key="admin_ui_password_input",
+            )
+            if st.button("Unlock dashboard", type="primary", use_container_width=True):
+                st.session_state.admin_ui_authenticated = secrets.compare_digest(
+                    pwd or "", ADMIN_UI_PASSWORD
+                )
+                if st.session_state.admin_ui_authenticated:
+                    st.success("Access granted")
+                    st.rerun()
+                else:
+                    st.error("Invalid passphrase")
+            st.info("Set ADMIN_UI_PASSWORD in the environment for production deployments.")
+            st.stop()
 
 # ── Helper Functions ───────────────────────────────────────────────────────────
+
+
+def _escape_html(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _safe_external_url(url: object) -> str | None:
+    if not isinstance(url, str):
+        return None
+    parsed = urlparse(url.strip())
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return url
+    return None
 
 def api_get(endpoint: str, params: dict | None = None) -> dict:
     try:
@@ -148,13 +188,15 @@ def api_patch(endpoint: str, payload: dict) -> dict:
 
 def render_safety_flags(flags: list[dict]) -> None:
     for flag in flags:
-        severity  = flag.get("severity", "info")
+        severity = str(flag.get("severity", "info")).lower()
+        if severity not in {"critical", "warning", "info"}:
+            severity = "info"
         css_class = f"safety-{severity}"
         icon      = {"critical": "🚨", "warning": "⚠️", "info": "ℹ️"}.get(severity, "ℹ️")
         st.markdown(
             f'<div class="{css_class}">'
-            f'<strong>{icon} [{flag.get("code","?")}] {flag.get("message","")}</strong><br>'
-            f'<small>{flag.get("rationale","")}</small>'
+            f'<strong>{icon} [{_escape_html(flag.get("code","?"))}] {_escape_html(flag.get("message",""))}</strong><br>'
+            f'<small>{_escape_html(flag.get("rationale",""))}</small>'
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -230,8 +272,9 @@ if page == "💬 Chat":
                     tier = cit.get("evidence_tier", "?")
                     with st.expander(f"[{i}] {cit.get('source_name','Unknown')} — Tier {tier}"):
                         st.write(cit.get("excerpt", ""))
-                        if cit.get("url"):
-                            st.markdown(f"[🔗 Source]({cit['url']})")
+                        safe_url = _safe_external_url(cit.get("url"))
+                        if safe_url:
+                            st.markdown(f"[🔗 Source]({safe_url})")
 
             ev_summary = result.get("evidence_summary", "")
             if ev_summary:
@@ -488,7 +531,11 @@ elif page == "📚 Source Manager":
                 ):
                     st.code(f"Document ID: {doc_id}", language=None)
                     if url:
-                        st.markdown(f"🔗 [{url}]({url})")
+                        safe_url = _safe_external_url(url)
+                        if safe_url:
+                            st.markdown(f"🔗 [{safe_url}]({safe_url})")
+                        else:
+                            st.caption("⚠️ Source URL is not a valid http(s) link.")
                     st.caption(
                         f"Extraction: `{extraction_method}` · "
                         f"Chunking: `{src.get('chunking_strategy') or 'token'}`"
@@ -754,9 +801,9 @@ elif page == "📋 Audit Logs":
             with st.expander(f"**{ev_type}** · {ts} · role: {role or '—'} · {req_id}…"):
                 st.markdown(
                     f"<div style='background:{bg};padding:.5rem .75rem;border-radius:6px;font-size:.8rem'>"
-                    f"<b>Event:</b> {ev_type} &nbsp;|&nbsp; <b>Role:</b> {role or '—'} &nbsp;|&nbsp; "
-                    f"<b>Time:</b> {ts}<br><b>Request ID:</b> {ev.get('request_id','')}<br>"
-                    f"<b>IP hash:</b> {ev.get('ip_hash','—')}"
+                    f"<b>Event:</b> {_escape_html(ev_type)} &nbsp;|&nbsp; <b>Role:</b> {_escape_html(role or '—')} &nbsp;|&nbsp; "
+                    f"<b>Time:</b> {_escape_html(ts)}<br><b>Request ID:</b> {_escape_html(ev.get('request_id',''))}<br>"
+                    f"<b>IP hash:</b> {_escape_html(ev.get('ip_hash','—'))}"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -789,7 +836,7 @@ elif page == "⚙️ Config":
                 colour = "status-ok" if svc_status == "ok" else "status-error"
                 icon   = "✅" if svc_status == "ok" else "❌"
                 st.markdown(
-                    f'<span class="{colour}">{icon} {svc}: {svc_status}</span>',
+                    f'<span class="{colour}">{icon} {_escape_html(svc)}: {_escape_html(svc_status)}</span>',
                     unsafe_allow_html=True,
                 )
 
