@@ -22,7 +22,7 @@ from pipelines.common.storage import save_normalized, save_to_vector_store
 
 logger = logging.getLogger(__name__)
 DEFAULT_EVIDENCE_TIER = 3
-SOURCE_TYPE = "skool_course"
+SOURCE_TYPE = "skool_courses"
 
 
 class SkoolCourseIngestor:
@@ -45,6 +45,7 @@ class SkoolCourseIngestor:
         self.output_dir = Path(output_dir)
         self.chroma_persist_dir = chroma_persist_dir
         self.max_tokens = max_tokens_per_chunk
+        self.load_errors: list[str] = []
 
     def _parse_json_export(self, path: Path) -> list[RawDocument]:
         """Parse a Skool JSON export file into RawDocuments."""
@@ -86,6 +87,7 @@ class SkoolCourseIngestor:
         )]
 
     def load_raw(self) -> list[RawDocument]:
+        self.load_errors = []
         if not self.raw_dir.exists():
             logger.warning("Skool courses directory not found: %s", self.raw_dir)
             return []
@@ -97,11 +99,13 @@ class SkoolCourseIngestor:
                     docs.extend(self._parse_json_export(path))
                 except Exception as e:
                     logger.error("Error parsing %s: %s", path, e)
+                    self.load_errors.append(f"Malformed Skool courses export {path.name}: {e}")
             elif path.suffix.lower() in {".html", ".htm"}:
                 try:
                     docs.extend(self._parse_html_export(path))
                 except Exception as e:
                     logger.error("Error parsing %s: %s", path, e)
+                    self.load_errors.append(f"Malformed Skool courses export {path.name}: {e}")
 
         logger.info("SkoolCourseIngestor: loaded %d documents", len(docs))
         return docs
@@ -140,6 +144,7 @@ class SkoolCourseIngestor:
         start = time.time()
         docs = self.load_raw()
         result = self.process(docs)
+        result.errors.extend(self.load_errors)
         result.duration_seconds = time.time() - start
         logger.info("%s", result)
         return result

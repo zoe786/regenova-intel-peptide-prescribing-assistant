@@ -333,11 +333,11 @@ elif page == "📤 Upload":
 
     with tab_url:
         st.markdown("#### Register a URL, YouTube video, or PubMed ID")
-        st.caption("The URL is appended to the source list and ingested in the background.")
+        st.caption("Register URL/ID-based sources. Skool sources are ingested from file exports in data/raw/skool/.")
 
         SOURCE_TYPES = [
             "website", "blog", "youtube", "forum",
-            "pubmed", "skool_courses", "skool_community",
+            "pubmed",
         ]
 
         with st.form("url_form"):
@@ -467,7 +467,7 @@ elif page == "📚 Source Manager":
     st.markdown('<h1 class="main-header">📚 Source Manager</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-caption">Browse, filter, and delete ingested knowledge sources.</p>', unsafe_allow_html=True)
 
-    SOURCE_TYPES_FILTER = ["", "document", "website", "youtube", "pubmed", "forum", "skool_course", "skool_community"]
+    SOURCE_TYPES_FILTER = ["", "document", "website", "youtube", "pubmed", "forum", "skool_courses", "skool_community"]
 
     col1, col2, col3 = st.columns(3)
     with col1:

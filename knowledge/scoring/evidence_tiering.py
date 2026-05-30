@@ -34,6 +34,7 @@ SOURCE_TYPE_TIER_MAP: dict[str, int] = {
     "website": 3,
     "youtube": 3,
     "skool_course": 3,
+    "skool_courses": 3,
     "skool_community": 4,
     "forum": 4,
     "anecdotal": 5,

@@ -7,9 +7,11 @@ fetches abstracts via NCBI Entrez API, chunks (evidence_tier_default=1).
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pipelines.common.chunking import chunk_by_tokens
 from pipelines.common.cleaners import normalize_whitespace
@@ -23,6 +25,7 @@ SOURCE_TYPE = "pubmed"
 PUBMED_BASE_URL = "https://pubmed.ncbi.nlm.nih.gov/"
 ENTREZ_BATCH_SIZE = 20
 ENTREZ_DELAY = 0.34  # Respect NCBI rate limits (3 req/sec without API key)
+PMID_RE = re.compile(r"^\d{4,10}$")
 
 
 class PubMedIngestor:
@@ -44,6 +47,21 @@ class PubMedIngestor:
         self.api_key = api_key
         self.max_tokens = max_tokens_per_chunk
         self.pmids_file = self.raw_dir / "pmids.txt"
+        self.load_errors: list[str] = []
+
+    @staticmethod
+    def _normalise_pmid(value: str) -> str | None:
+        candidate = value.split("#", 1)[0].strip()
+        if not candidate:
+            return None
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            parts = [p for p in parsed.path.split("/") if p]
+            if parsed.hostname and parsed.hostname.lower() == "pubmed.ncbi.nlm.nih.gov" and parts:
+                candidate = parts[0]
+        if not PMID_RE.fullmatch(candidate):
+            return None
+        return candidate
 
     def _setup_entrez(self) -> None:
         """Configure Biopython Entrez with email and API key."""
@@ -102,14 +120,26 @@ class PubMedIngestor:
         return results
 
     def load_raw(self) -> list[RawDocument]:
+        self.load_errors = []
         if not self.pmids_file.exists():
             logger.warning("PubMed IDs file not found: %s", self.pmids_file)
             return []
 
-        pmids = [
-            line.strip() for line in self.pmids_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
+        pmids: list[str] = []
+        seen: set[str] = set()
+        for idx, line in enumerate(self.pmids_file.read_text(encoding="utf-8").splitlines(), start=1):
+            pmid = self._normalise_pmid(line)
+            if not pmid:
+                candidate = line.split("#", 1)[0].strip()
+                if candidate:
+                    self.load_errors.append(
+                        f"Invalid PMID at line {idx} in {self.pmids_file.name}: {candidate}"
+                    )
+                continue
+            if pmid in seen:
+                continue
+            seen.add(pmid)
+            pmids.append(pmid)
         logger.info("PubMedIngestor: found %d PMIDs", len(pmids))
 
         self._setup_entrez()
@@ -170,6 +200,7 @@ class PubMedIngestor:
         start = time.time()
         docs = self.load_raw()
         result = self.process(docs)
+        result.errors.extend(self.load_errors)
         result.duration_seconds = time.time() - start
         logger.info("%s", result)
         return result

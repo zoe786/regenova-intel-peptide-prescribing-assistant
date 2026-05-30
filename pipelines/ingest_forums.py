@@ -35,8 +35,10 @@ class ForumIngestor:
         self.raw_dir = Path(raw_dir)
         self.output_dir = Path(output_dir)
         self.chroma_persist_dir = chroma_persist_dir
+        self.load_errors: list[str] = []
 
     def load_raw(self) -> list[RawDocument]:
+        self.load_errors = []
         if not self.raw_dir.exists():
             logger.warning("Forums directory not found: %s", self.raw_dir)
             return []
@@ -70,6 +72,7 @@ class ForumIngestor:
                     ))
             except Exception as e:
                 logger.error("Error reading %s: %s", json_file, e)
+                self.load_errors.append(f"Malformed forum export {json_file.name}: {e}")
 
         return docs
 
@@ -107,6 +110,7 @@ class ForumIngestor:
         start = time.time()
         docs = self.load_raw()
         result = self.process(docs)
+        result.errors.extend(self.load_errors)
         result.duration_seconds = time.time() - start
         logger.info("%s", result)
         return result

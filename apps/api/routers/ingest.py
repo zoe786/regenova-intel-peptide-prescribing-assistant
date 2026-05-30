@@ -101,6 +101,9 @@ def _run_single_ingestion_task(
             total_chunks=result.count,
             results={source_type: {
                 "count": result.count,
+                "skipped": result.skipped,
+                "success": result.success,
+                "error_count": len(result.errors),
                 "errors": result.errors,
                 "quarantined_documents": quarantined_documents,
                 "duration_seconds": round(result.duration_seconds, 2),

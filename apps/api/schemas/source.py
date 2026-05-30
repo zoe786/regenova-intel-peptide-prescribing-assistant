@@ -13,7 +13,7 @@ class SourceMetadata(BaseModel):
 
     source_type: str = Field(
         ...,
-        description="Type of source: pubmed, document, website, youtube, skool_course, skool_community, forum",
+        description="Type of source: pubmed, document, website, youtube, skool_courses, skool_community, forum",
     )
     source_name: str = Field(..., description="Human-readable name of the source")
     source_url: Optional[str] = Field(default=None, description="URL of the source")

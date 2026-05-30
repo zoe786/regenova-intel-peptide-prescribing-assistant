@@ -4,8 +4,8 @@ Provides:
 - POST /upload/documents  — upload one or more PDF/TXT/MD files into the
                             raw documents directory and trigger DocumentIngestor.
 - POST /upload/url        — register a URL / video ID for website, youtube,
-                            pubmed, forum, blog, skool_courses, or
-                            skool_community ingestion.
+                            pubmed, forum, or blog ingestion.
+                            (Skool ingestion is file-export based in Phase 1.)
 
 All endpoints require X-Admin-Key header and log audit events.
 """
@@ -13,9 +13,11 @@ All endpoints require X-Admin-Key header and log audit events.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import (
     APIRouter,
@@ -36,6 +38,8 @@ router = APIRouter(prefix="/upload", tags=["Upload"])
 
 _ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
 _MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+_YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
+_PMID_RE = re.compile(r"^\d{4,10}$")
 
 # Supported source types and which raw-directory file to append URLs to
 _URL_SOURCE_MAP: dict[str, tuple[str, str]] = {
@@ -44,8 +48,10 @@ _URL_SOURCE_MAP: dict[str, tuple[str, str]] = {
     "youtube":        ("youtube",  "video_ids.txt"),
     "forum":          ("forums",   "urls.txt"),
     "pubmed":         ("pubmed",   "pmids.txt"),
-    "skool_courses":  ("skool_courses",   "course_urls.txt"),
-    "skool_community":("skool_community", "community_urls.txt"),
+}
+
+_SOURCE_TYPE_ALIASES: dict[str, str] = {
+    "skool_course": "skool_courses",
 }
 
 
@@ -75,7 +81,11 @@ class UrlIngestRequest(BaseModel):
     url: str = Field(..., min_length=3, description="URL, YouTube video ID, or PubMed PMID")
     source_type: str = Field(
         ...,
-        description="One of: website, blog, youtube, forum, pubmed, skool_courses, skool_community",
+        description=(
+            "One of: website, blog, youtube, forum, pubmed. "
+            "Skool sources are file-export based and should be ingested from "
+            "data/raw/skool/courses or data/raw/skool/community."
+        ),
     )
     evidence_tier_override: int | None = Field(
         default=None, ge=1, le=5,
@@ -152,6 +162,9 @@ def _ingest_url_task(
             total_chunks=result.count,
             results={source_type: {
                 "count": result.count,
+                "skipped": result.skipped,
+                "success": result.success,
+                "error_count": len(result.errors),
                 "errors": result.errors,
                 "duration_seconds": round(result.duration_seconds, 2),
             }},
@@ -163,6 +176,80 @@ def _ingest_url_task(
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
+
+def _canonical_source_type(source_type: str) -> str:
+    return _SOURCE_TYPE_ALIASES.get(source_type.strip(), source_type.strip())
+
+
+def _parse_existing_list_values(list_path: Path) -> set[str]:
+    if not list_path.exists():
+        return set()
+    values: set[str] = set()
+    for line in list_path.read_text(encoding="utf-8").splitlines():
+        value = line.split("#", 1)[0].strip()
+        if value:
+            values.add(value)
+    return values
+
+
+def _normalize_registration_value(value: str, source_type: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Input cannot be empty", "source_type": source_type},
+        )
+
+    if source_type in {"website", "blog", "forum"}:
+        parsed = urlparse(candidate)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Expected a valid http(s) URL for this source type",
+                    "source_type": source_type,
+                    "value": candidate,
+                },
+            )
+        return candidate
+
+    if source_type == "youtube":
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            host = parsed.netloc.lower()
+            if "youtu.be" in host:
+                candidate = parsed.path.strip("/")
+            else:
+                candidate = parse_qs(parsed.query).get("v", [candidate])[0]
+        if not _YOUTUBE_ID_RE.fullmatch(candidate):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Expected a YouTube video ID (or URL containing a valid video ID)",
+                    "source_type": source_type,
+                    "value": value.strip(),
+                },
+            )
+        return candidate
+
+    if source_type == "pubmed":
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            parts = [p for p in parsed.path.split("/") if p]
+            if parsed.hostname and parsed.hostname.lower() == "pubmed.ncbi.nlm.nih.gov" and parts:
+                candidate = parts[0]
+        if not _PMID_RE.fullmatch(candidate):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Expected a numeric PubMed PMID (4-10 digits)",
+                    "source_type": source_type,
+                    "value": value.strip(),
+                },
+            )
+        return candidate
+
+    return candidate
 
 @router.post(
     "/documents",
@@ -266,7 +353,20 @@ async def upload_url(
     audit_store: AuditStore = Depends(_get_audit_store),
 ) -> dict:
     """Register a URL for ingestion and trigger the appropriate pipeline."""
-    if body.source_type not in _URL_SOURCE_MAP:
+    canonical_source_type = _canonical_source_type(body.source_type)
+    if canonical_source_type in {"skool_courses", "skool_community"}:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    f"'{canonical_source_type}' ingestion uses exported files, not URL registration. "
+                    "Place exports under data/raw/skool/courses or data/raw/skool/community and trigger ingestion."
+                ),
+                "source_type": canonical_source_type,
+            },
+        )
+
+    if canonical_source_type not in _URL_SOURCE_MAP:
         raise HTTPException(
             status_code=422,
             detail={
@@ -275,33 +375,37 @@ async def upload_url(
             },
         )
 
-    subdir, list_filename = _URL_SOURCE_MAP[body.source_type]
+    normalized_value = _normalize_registration_value(body.url, canonical_source_type)
+
+    subdir, list_filename = _URL_SOURCE_MAP[canonical_source_type]
     list_path = Path(settings.raw_data_dir) / subdir / list_filename
     list_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Append URL (avoid duplicates)
-    existing: set[str] = set()
-    if list_path.exists():
-        existing = {ln.strip() for ln in list_path.read_text().splitlines() if ln.strip()}
+    existing = _parse_existing_list_values(list_path)
+    existing_casefolded = {item.casefold() for item in existing}
 
-    if body.url in existing:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "URL already registered", "url": body.url},
-        )
+    if normalized_value.casefold() in existing_casefolded:
+        return {
+            "message": "Source already registered; skipping duplicate ingestion trigger",
+            "url": normalized_value,
+            "source_type": canonical_source_type,
+            "status": "skipped_duplicate",
+            "triggered_at": datetime.now(tz=timezone.utc).isoformat(),
+        }
 
     with list_path.open("a", encoding="utf-8") as fh:
         label_comment = f"  # {body.label}" if body.label else ""
-        fh.write(f"\n{body.url}{label_comment}")
+        fh.write(f"\n{normalized_value}{label_comment}")
 
-    job_id = audit_store.log_ingest_job(source_type=body.source_type)
+    job_id = audit_store.log_ingest_job(source_type=canonical_source_type)
 
     client_ip = request.client.host if request.client else ""
     audit_store.log_event(
         event_type="upload",
         data={
-            "url": body.url,
-            "source_type": body.source_type,
+            "url": normalized_value,
+            "source_type": canonical_source_type,
             "evidence_tier_override": body.evidence_tier_override,
             "label": body.label,
             "job_id": job_id,
@@ -312,7 +416,7 @@ async def upload_url(
 
     background_tasks.add_task(
         _ingest_url_task,
-        body.source_type,
+        canonical_source_type,
         settings.chroma_persist_dir,
         audit_store,
         job_id,
@@ -320,15 +424,15 @@ async def upload_url(
 
     logger.info(
         "URL registered for ingestion: type=%s url=%s job_id=%s",
-        body.source_type,
-        body.url,
+        canonical_source_type,
+        normalized_value,
         job_id,
     )
 
     return {
-        "message": f"URL registered and {body.source_type} ingestion queued",
+        "message": f"Source registered and {canonical_source_type} ingestion queued",
         "job_id": job_id,
-        "url": body.url,
-        "source_type": body.source_type,
+        "url": normalized_value,
+        "source_type": canonical_source_type,
         "triggered_at": datetime.now(tz=timezone.utc).isoformat(),
     }

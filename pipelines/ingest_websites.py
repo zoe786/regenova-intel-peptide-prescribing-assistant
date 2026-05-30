@@ -104,6 +104,15 @@ class WebsiteIngestor:
         self.max_tokens = max_tokens_per_chunk
         self.urls_file = self.raw_dir / "urls.txt"
         self.auth_profiles = _load_auth_config(self.raw_dir)
+        self.load_errors: list[str] = []
+
+    @staticmethod
+    def _normalise_url_candidate(line: str) -> str:
+        return line.split("#", 1)[0].strip()
+
+    def _validate_url(self, url: str) -> bool:
+        parsed = urlparse(url)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
     def _fetch_url(self, url: str) -> str | None:
         """Fetch a URL and return the HTML content."""
@@ -127,14 +136,27 @@ class WebsiteIngestor:
 
     def load_raw(self) -> list[RawDocument]:
         """Read URL list and fetch each page."""
+        self.load_errors = []
         if not self.urls_file.exists():
             logger.warning("URL list file not found: %s", self.urls_file)
             return []
 
-        urls = [
-            line.strip() for line in self.urls_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
+        urls: list[str] = []
+        seen: set[str] = set()
+        for idx, line in enumerate(self.urls_file.read_text(encoding="utf-8").splitlines(), start=1):
+            candidate = self._normalise_url_candidate(line)
+            if not candidate:
+                continue
+            if not self._validate_url(candidate):
+                self.load_errors.append(
+                    f"Invalid website URL at line {idx} in {self.urls_file.name}: {candidate}"
+                )
+                continue
+            folded = candidate.casefold()
+            if folded in seen:
+                continue
+            seen.add(folded)
+            urls.append(candidate)
         logger.info("WebsiteIngestor: found %d URLs", len(urls))
 
         docs: list[RawDocument] = []
@@ -200,6 +222,7 @@ class WebsiteIngestor:
         start = time.time()
         docs = self.load_raw()
         result = self.process(docs)
+        result.errors.extend(self.load_errors)
         result.duration_seconds = time.time() - start
         logger.info("%s", result)
         return result

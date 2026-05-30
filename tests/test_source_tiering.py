@@ -90,6 +90,9 @@ class TestSourceTypeToTier:
     def test_skool_community_is_tier_4(self):
         assert source_type_to_tier("skool_community") == 4
 
+    def test_skool_courses_is_tier_3(self):
+        assert source_type_to_tier("skool_courses") == 3
+
     def test_unknown_source_type_returns_3(self):
         """Unknown source types should default to tier 3."""
         assert source_type_to_tier("something_unknown") == 3

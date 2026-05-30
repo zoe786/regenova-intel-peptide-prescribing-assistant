@@ -105,7 +105,7 @@ Each document carries the following tier-relevant metadata:
 | Field | Type | Description |
 |-------|------|-------------|
 | `evidence_tier_default` | int (1-5) | Tier assigned at ingest based on source type |
-| `source_type` | str | `pubmed`, `document`, `website`, `youtube`, `skool_course`, `skool_community`, `forum` |
+| `source_type` | str | `pubmed`, `document`, `website`, `youtube`, `skool_courses`, `skool_community`, `forum` |
 | `source_name` | str | Name of the publication, site, or platform |
 | `published_at` | datetime | Publication date (for recency boost) |
 | `jurisdiction` | str | Geographic jurisdiction if relevant (e.g., `US`, `EU`, `global`) |
@@ -167,7 +167,7 @@ final_score: 1.00 × 0.87 × 1.00 = 0.870
 
 ### Example 2: Skool Course Module
 ```
-source_type: skool_course
+source_type: skool_courses
 source_name: "Advanced Peptide Protocols Course"
 published_at: 2023-11-20
 evidence_tier_default: 3

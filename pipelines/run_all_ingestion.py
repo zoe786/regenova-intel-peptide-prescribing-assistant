@@ -53,6 +53,7 @@ class RunAllIngestion:
 
         results: dict = {}
         total_count = 0
+        total_skipped = 0
         total_start = time.time()
 
         for name, ingestor in ingestors:
@@ -61,18 +62,31 @@ class RunAllIngestion:
                 result = ingestor.run()
                 results[name] = {
                     "count": result.count,
+                    "skipped": result.skipped,
+                    "success": result.success,
+                    "error_count": len(result.errors),
                     "errors": result.errors,
                     "duration_seconds": round(result.duration_seconds, 2),
                     "status": "ok" if result.success else "error",
                 }
                 total_count += result.count
+                total_skipped += result.skipped
             except Exception as exc:
                 logger.error("Ingestor %s failed: %s", name, exc)
-                results[name] = {"count": 0, "errors": [str(exc)], "status": "failed"}
+                results[name] = {
+                    "count": 0,
+                    "skipped": 0,
+                    "success": False,
+                    "error_count": 1,
+                    "errors": [str(exc)],
+                    "duration_seconds": 0.0,
+                    "status": "failed",
+                }
 
         total_duration = round(time.time() - total_start, 2)
         summary = {
             "total_chunks": total_count,
+            "total_skipped": total_skipped,
             "total_duration_seconds": total_duration,
             "ingestors": results,
         }
@@ -88,9 +102,16 @@ class RunAllIngestion:
         print("═" * 60)
         for name, result in summary["ingestors"].items():
             status = "✓" if result["status"] == "ok" else "✗"
-            print(f"  {status} {name:<20} {result['count']:>5} chunks  {result['duration_seconds']:>5.1f}s")
+            print(
+                f"  {status} {name:<20} {result['count']:>5} chunks"
+                f"  {result.get('skipped', 0):>3} skipped  {result['duration_seconds']:>5.1f}s"
+            )
         print("─" * 60)
-        print(f"  Total: {summary['total_chunks']} chunks | {summary['total_duration_seconds']:.1f}s")
+        print(
+            f"  Total: {summary['total_chunks']} chunks"
+            f" | {summary.get('total_skipped', 0)} skipped"
+            f" | {summary['total_duration_seconds']:.1f}s"
+        )
         print("═" * 60 + "\n")
 
 

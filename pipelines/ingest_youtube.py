@@ -7,9 +7,11 @@ fetches transcripts via youtube_transcript_api, and chunks them.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from pipelines.common.chunking import chunk_by_tokens
 from pipelines.common.cleaners import normalize_whitespace
@@ -22,6 +24,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_EVIDENCE_TIER = 3
 SOURCE_TYPE = "youtube"
 YOUTUBE_BASE_URL = "https://www.youtube.com/watch?v="
+YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
 
 
 class YouTubeIngestor:
@@ -39,6 +42,23 @@ class YouTubeIngestor:
         self.chroma_persist_dir = chroma_persist_dir
         self.max_tokens = max_tokens_per_chunk
         self.ids_file = self.raw_dir / "video_ids.txt"
+        self.load_errors: list[str] = []
+
+    @staticmethod
+    def _normalise_video_id(value: str) -> str | None:
+        candidate = value.split("#", 1)[0].strip()
+        if not candidate:
+            return None
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            host = parsed.netloc.lower()
+            if "youtu.be" in host:
+                candidate = parsed.path.strip("/")
+            else:
+                candidate = parse_qs(parsed.query).get("v", [candidate])[0]
+        if not YOUTUBE_ID_RE.fullmatch(candidate):
+            return None
+        return candidate
 
     def _fetch_transcript(self, video_id: str) -> str | None:
         """Fetch transcript text for a YouTube video ID."""
@@ -51,14 +71,26 @@ class YouTubeIngestor:
             return None
 
     def load_raw(self) -> list[RawDocument]:
+        self.load_errors = []
         if not self.ids_file.exists():
             logger.warning("Video IDs file not found: %s", self.ids_file)
             return []
 
-        video_ids = [
-            line.strip() for line in self.ids_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
+        video_ids: list[str] = []
+        seen: set[str] = set()
+        for idx, line in enumerate(self.ids_file.read_text(encoding="utf-8").splitlines(), start=1):
+            video_id = self._normalise_video_id(line)
+            if not video_id:
+                candidate = line.split("#", 1)[0].strip()
+                if candidate:
+                    self.load_errors.append(
+                        f"Invalid YouTube ID/URL at line {idx} in {self.ids_file.name}: {candidate}"
+                    )
+                continue
+            if video_id in seen:
+                continue
+            seen.add(video_id)
+            video_ids.append(video_id)
         logger.info("YouTubeIngestor: found %d video IDs", len(video_ids))
 
         docs: list[RawDocument] = []
@@ -115,6 +147,7 @@ class YouTubeIngestor:
         start = time.time()
         docs = self.load_raw()
         result = self.process(docs)
+        result.errors.extend(self.load_errors)
         result.duration_seconds = time.time() - start
         logger.info("%s", result)
         return result

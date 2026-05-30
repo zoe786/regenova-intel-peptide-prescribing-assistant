@@ -32,6 +32,7 @@ router = APIRouter(tags=["Sources & Chunks"])
 
 # Regex that chunk_ids and document_ids must match before use in file paths.
 _SAFE_ID_RE = re.compile(r'^[\w\-:.]+$')
+_SOURCE_TYPE_CANONICAL = {"skool_course": "skool_courses"}
 
 
 def _validate_id_for_path(value: str, field: str) -> None:
@@ -65,13 +66,19 @@ def _safe_chunk_path(norm_dir: Path, chunk_id: str) -> Path | None:
     if not _SAFE_ID_RE.fullmatch(chunk_id):
         logger.warning("Blocked unsafe chunk_id: %r", chunk_id)
         return None
-    try:
-        for fpath in norm_dir.iterdir():
-            if fpath.is_file() and fpath.suffix == ".json" and fpath.stem == chunk_id:
-                return fpath
-    except OSError:
-        pass
-    return None
+        try:
+            for fpath in norm_dir.iterdir():
+                if fpath.is_file() and fpath.suffix == ".json" and fpath.stem == chunk_id:
+                    return fpath
+        except OSError:
+            pass
+        return None
+
+
+def _canonical_source_type(source_type: str | None) -> str | None:
+        if source_type is None:
+            return None
+        return _SOURCE_TYPE_CANONICAL.get(source_type, source_type)
 
 
 # -- Auth / dependency helpers -------------------------------------------------
@@ -140,6 +147,7 @@ async def list_sources(
     audit_store: AuditStore = Depends(_get_audit_store),
 ) -> dict:
     """Aggregate ChromaDB collection by document_id to produce a source list."""
+    source_type = _canonical_source_type(source_type)
     collection = _get_collection(settings)
 
     try:
@@ -176,7 +184,7 @@ async def list_sources(
         docs: dict[str, dict] = {}
         for chunk_id_val, meta in zip(all_ids, all_metadatas):
             doc_id = meta.get("document_id", chunk_id_val)
-            src_type = meta.get("source_type", "unknown")
+            src_type = _canonical_source_type(meta.get("source_type", "unknown")) or "unknown"
             tier = int(meta.get("evidence_tier_default", 3))
 
             if source_type and src_type != source_type:

@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Status](https://img.shields.io/badge/status-scaffold-orange.svg)
+![Status](https://img.shields.io/badge/status-phase--1-blue.svg)
 
 > **⚠️ CLINICAL DISCLAIMER:** REGENOVA-Intel is a **clinical decision support tool only**. It does not provide medical advice, diagnosis, or treatment. All outputs must be reviewed by a qualified healthcare professional before clinical application. Use of this system does not create a clinician-patient relationship.
 
@@ -11,7 +11,20 @@
 
 ## Overview
 
-REGENOVA-Intel is an evidence-tiered AI assistant for peptide prescribing decisions. It ingests multi-source knowledge (peer-reviewed literature, clinical documents, practitioner courses, community forums) and serves a retrieval-augmented generation (RAG) API with safety rules, evidence tiering, and citation integrity.
+REGENOVA-Intel is a **Phase 1 evidence-tiered peptide knowledge ingestion and clinician decision-support platform**. It ingests curated external sources (PubMed, documents, websites, YouTube, Skool exports, forums) and serves citation-backed retrieval with evidence tiering and clinical safety guardrails.
+
+### Phase 1 scope (implemented)
+
+- Curated-source ingestion and normalization
+- Evidence-tier assignment and confidence weighting
+- Provenance-aware source/chunk browsing for admins
+- Citation-backed clinician responses with safety framing
+
+### Out of scope for Phase 1
+
+- Autonomous source discovery/crawling
+- Longitudinal patient data capture or outcome analytics
+- Autonomous prescribing or treatment automation
 
 ---
 
@@ -129,6 +142,8 @@ Example:
   }
 }
 ```
+
+Skool sources are **file-export based** in Phase 1. Place exports in `data/raw/skool/courses/` and `data/raw/skool/community/`, then trigger ingestion.
 
 ---
 
