@@ -74,6 +74,8 @@ data/processed/*
 data/curated/*
 data/exports/*
 data/chroma_db/
+data/state/*
+data/audit/collectors/*
 !data/raw/documents/.gitkeep
 !data/raw/websites/.gitkeep
 !data/raw/skool/.gitkeep
@@ -83,6 +85,9 @@ data/chroma_db/
 !data/processed/.gitkeep
 !data/curated/.gitkeep
 !data/exports/.gitkeep
+!data/state/.gitkeep
+!data/audit/.gitkeep
+!data/audit/collectors/.gitkeep
 
 # Secrets
 *.pem

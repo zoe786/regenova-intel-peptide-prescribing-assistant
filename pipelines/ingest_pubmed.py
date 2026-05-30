@@ -1,6 +1,6 @@
 """PubMed abstract ingestor using Biopython Entrez.
 
-Reads PubMed IDs from data/raw/pubmed/pmids.txt,
+Reads PubMed IDs from one or more files in data/raw/pubmed/*.txt,
 fetches abstracts via NCBI Entrez API, chunks (evidence_tier_default=1).
 """
 
@@ -44,6 +44,28 @@ class PubMedIngestor:
         self.api_key = api_key
         self.max_tokens = max_tokens_per_chunk
         self.pmids_file = self.raw_dir / "pmids.txt"
+
+    def _load_pmids(self) -> list[str]:
+        """Load PMIDs from all .txt files in raw_dir with deduplication."""
+        if not self.raw_dir.exists():
+            logger.warning("PubMed raw directory not found: %s", self.raw_dir)
+            return []
+
+        txt_files = sorted(self.raw_dir.glob("*.txt"))
+        if not txt_files:
+            logger.warning("No PMID files found in: %s", self.raw_dir)
+            return []
+
+        seen: set[str] = set()
+        pmids: list[str] = []
+        for txt_file in txt_files:
+            for line in txt_file.read_text(encoding="utf-8").splitlines():
+                value = line.strip()
+                if not value or value.startswith("#") or value in seen:
+                    continue
+                seen.add(value)
+                pmids.append(value)
+        return pmids
 
     def _setup_entrez(self) -> None:
         """Configure Biopython Entrez with email and API key."""
@@ -102,14 +124,7 @@ class PubMedIngestor:
         return results
 
     def load_raw(self) -> list[RawDocument]:
-        if not self.pmids_file.exists():
-            logger.warning("PubMed IDs file not found: %s", self.pmids_file)
-            return []
-
-        pmids = [
-            line.strip() for line in self.pmids_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
+        pmids = self._load_pmids()
         logger.info("PubMedIngestor: found %d PMIDs", len(pmids))
 
         self._setup_entrez()

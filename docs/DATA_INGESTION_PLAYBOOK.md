@@ -20,7 +20,9 @@ python scripts/init_db.py   # initialise ChromaDB collection
 
 ### PubMed (Tier 1)
 ```
-data/raw/pubmed/pmids.txt
+data/raw/pubmed/
+  ├── pmids.txt
+  └── pmids_<source_id>.txt
 ```
 One PubMed ID per line, e.g.:
 ```
@@ -40,7 +42,9 @@ Supported formats: `.pdf`, `.txt`, `.md`
 
 ### Websites (Tier 3)
 ```
-data/raw/websites/urls.txt
+data/raw/websites/
+  ├── urls.txt
+  └── urls_<source_id>.txt
 ```
 One URL per line:
 ```
@@ -69,7 +73,9 @@ You can also provide the same JSON via `WEBSITE_INGEST_AUTH_JSON` env var.
 
 ### YouTube Transcripts (Tier 3)
 ```
-data/raw/youtube/video_ids.txt
+data/raw/youtube/
+  ├── video_ids.txt
+  └── video_ids_<source_id>.txt
 ```
 One YouTube video ID per line:
 ```
@@ -132,7 +138,31 @@ Each ingestor outputs normalized JSON to `data/processed/normalized/` and logs p
 
 ---
 
-## 3. Running Unified Ingestion
+## 3. Approved-Source Collectors (Phase 1 additive)
+
+To generate/update raw artifacts from approved source definitions:
+
+```bash
+python scripts/run_collectors.py
+# or:
+make collect
+```
+
+Registry path (default): `config/source_registry.yaml`
+
+Optional filters:
+
+```bash
+python scripts/run_collectors.py --source-type website
+python scripts/run_collectors.py --source-id pubmed-peptide-core
+python scripts/run_collectors.py --no-trigger-ingestion
+```
+
+Collectors write state checkpoints to `data/state/collectors_state.json` and structured audit events to `data/audit/collectors/*.jsonl`.
+
+---
+
+## 4. Running Unified Ingestion
 
 To run all ingestors in sequence with a summary report:
 
@@ -160,7 +190,7 @@ Total: 71 documents | 18.6s
 
 ---
 
-## 4. Running Knowledge Extraction
+## 5. Running Knowledge Extraction
 
 After ingestion, extract structured claims and triples:
 
@@ -195,7 +225,7 @@ GraphBuilder().run()
 
 ---
 
-## 5. Reindexing
+## 6. Reindexing
 
 To re-embed all normalized chunks and refresh the vector store:
 
@@ -214,7 +244,7 @@ This:
 
 ---
 
-## 6. Validating via API and Admin UI
+## 7. Validating via API and Admin UI
 
 ### API validation
 
@@ -249,7 +279,7 @@ python scripts/smoke_test.py
 
 ---
 
-## 7. Adding a New Source Type
+## 8. Adding a New Source Type
 
 ### Checklist
 

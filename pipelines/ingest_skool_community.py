@@ -45,10 +45,19 @@ class SkoolCommunityIngestor:
         for json_file in sorted(self.raw_dir.glob("*.json")):
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
-                posts = data if isinstance(data, list) else data.get("posts", [data])
+                if isinstance(data, list):
+                    posts = data
+                elif isinstance(data, dict):
+                    posts = data.get("posts", [data])
+                else:
+                    posts = []
                 for post in posts:
+                    if not isinstance(post, dict):
+                        continue
                     content_parts = [post.get("content", "")]
                     for reply in post.get("replies", []):
+                        if not isinstance(reply, dict):
+                            continue
                         reply_text = reply.get("content", "")
                         if reply_text:
                             content_parts.append(f"[Reply from {reply.get('author', 'member')}]: {reply_text}")

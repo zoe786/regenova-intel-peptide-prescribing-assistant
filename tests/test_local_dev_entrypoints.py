@@ -40,3 +40,15 @@ def test_init_db_script_runs_from_repo_root():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_run_collectors_script_runs_from_repo_root():
+    repo_root = Path(__file__).parents[1]
+    result = subprocess.run(
+        [sys.executable, "scripts/run_collectors.py", "--help"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
