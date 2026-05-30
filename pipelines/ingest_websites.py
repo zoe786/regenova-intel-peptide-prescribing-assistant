@@ -1,6 +1,6 @@
 """Website ingestor — fetches URLs and extracts text content.
 
-Reads URL list from data/raw/websites/urls.txt, fetches with httpx,
+Reads URL lists from data/raw/websites/*.txt, fetches with httpx,
 parses with BeautifulSoup, cleans, and chunks (evidence_tier_default=3).
 """
 
@@ -105,6 +105,28 @@ class WebsiteIngestor:
         self.urls_file = self.raw_dir / "urls.txt"
         self.auth_profiles = _load_auth_config(self.raw_dir)
 
+    def _load_urls(self) -> list[str]:
+        """Load deduplicated URLs from all text files in raw_dir."""
+        if not self.raw_dir.exists():
+            logger.warning("Websites raw directory not found: %s", self.raw_dir)
+            return []
+
+        txt_files = sorted(self.raw_dir.glob("*.txt"))
+        if not txt_files:
+            logger.warning("No URL files found in: %s", self.raw_dir)
+            return []
+
+        seen: set[str] = set()
+        urls: list[str] = []
+        for txt_file in txt_files:
+            for line in txt_file.read_text(encoding="utf-8").splitlines():
+                value = line.strip()
+                if not value or value.startswith("#") or value in seen:
+                    continue
+                seen.add(value)
+                urls.append(value)
+        return urls
+
     def _fetch_url(self, url: str) -> str | None:
         """Fetch a URL and return the HTML content."""
         try:
@@ -127,14 +149,7 @@ class WebsiteIngestor:
 
     def load_raw(self) -> list[RawDocument]:
         """Read URL list and fetch each page."""
-        if not self.urls_file.exists():
-            logger.warning("URL list file not found: %s", self.urls_file)
-            return []
-
-        urls = [
-            line.strip() for line in self.urls_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
+        urls = self._load_urls()
         logger.info("WebsiteIngestor: found %d URLs", len(urls))
 
         docs: list[RawDocument] = []

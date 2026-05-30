@@ -1,0 +1,53 @@
+sources:
+  - id: pubmed-peptide-core
+    type: pubmed
+    enabled: true
+    name: "PubMed peptide evidence"
+    config:
+      queries:
+        - "BPC-157 tendon healing"
+        - "TB-500 wound repair"
+      max_results_per_query: 20
+      email_env: PUBMED_EMAIL
+      api_key_env: PUBMED_API_KEY
+
+  - id: website-swolverine
+    type: website
+    enabled: true
+    name: "Swolverine educational pages"
+    config:
+      urls:
+        - "https://swolverine.com/blogs/blog"
+
+  - id: youtube-approved-influencers
+    type: youtube
+    enabled: true
+    name: "Approved YouTube channels"
+    config:
+      video_ids:
+        - "dQw4w9WgXcQ"
+
+  - id: skool-community-export
+    type: skool_community
+    enabled: true
+    name: "Skool approved export"
+    config:
+      posts:
+        - post_id: "sample-1"
+          author: "moderator"
+          content: "Community protocol discussion sample."
+          replies:
+            - author: "member"
+              content: "Thanks for sharing."
+
+  - id: forum-approved-export
+    type: forum
+    enabled: true
+    name: "Forum approved export"
+    config:
+      threads:
+        - thread_id: "thread-1"
+          title: "Peptide protocol baseline"
+          posts:
+            - author: "member_a"
+              content: "Baseline labs were useful before starting."

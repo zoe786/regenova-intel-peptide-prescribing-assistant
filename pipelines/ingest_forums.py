@@ -44,14 +44,22 @@ class ForumIngestor:
         docs: list[RawDocument] = []
         for json_file in sorted(self.raw_dir.glob("*.json")):
             try:
-                threads = json.loads(json_file.read_text(encoding="utf-8"))
-                if not isinstance(threads, list):
-                    threads = [threads]
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    threads = data
+                elif isinstance(data, dict):
+                    threads = data.get("threads", [data])
+                else:
+                    threads = []
                 for thread in threads:
+                    if not isinstance(thread, dict):
+                        continue
                     title = thread.get("title", "Forum Thread")
                     posts = thread.get("posts", [])
                     content_parts = [f"Thread: {title}"]
                     for post in posts:
+                        if not isinstance(post, dict):
+                            continue
                         author = post.get("author", "Unknown")
                         text = post.get("content", "")
                         if text:

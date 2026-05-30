@@ -86,9 +86,15 @@ make run-admin
 # Admin dashboard available at http://localhost:8501
 ```
 
-### 6. Ingest Data
+### 6. Collect + Ingest Data
 
-Place source files in `data/raw/` subdirectories, then:
+Run approved-source collectors (registry-driven) to write/update `data/raw/` artifacts:
+
+```bash
+make collect
+```
+
+Then run ingestion:
 
 ```bash
 make ingest-all
@@ -100,13 +106,15 @@ make ingest-all
 
 | Source Type | Directory | Evidence Tier | Notes |
 |-------------|-----------|---------------|-------|
-| PubMed abstracts | `data/raw/pubmed/pmids.txt` | Tier 1 | High-quality peer-reviewed |
+| PubMed abstracts | `data/raw/pubmed/*.txt` | Tier 1 | PMID list files (e.g., `pmids_<source_id>.txt`) |
 | Clinical documents | `data/raw/documents/` | Tier 2 | PDF/TXT/MD files (PDF quality checks + OCR fallback when available) |
-| Websites | `data/raw/websites/urls.txt` | Tier 3 | URL list, fetched at ingest (supports optional auth profiles for login-protected pages) |
-| YouTube transcripts | `data/raw/youtube/video_ids.txt` | Tier 3 | Video ID list |
+| Websites | `data/raw/websites/*.txt` | Tier 3 | URL list files (e.g., `urls_<source_id>.txt`), fetched at ingest |
+| YouTube transcripts | `data/raw/youtube/*.txt` | Tier 3 | Video ID list files (e.g., `video_ids_<source_id>.txt`) |
 | Skool courses | `data/raw/skool/courses/` | Tier 3 | Exported JSON/HTML |
-| Skool community | `data/raw/skool/community/` | Tier 4 | Exported JSON |
-| Forums | `data/raw/forums/` | Tier 4 | Scraped JSON |
+| Skool community | `data/raw/skool/community/` | Tier 4 | Exported/canonical JSON |
+| Forums | `data/raw/forums/` | Tier 4 | Exported/canonical JSON |
+
+Approved source definitions are stored in `config/source_registry.yaml`. The collectors layer automates approved-source artifact writing only; it does not bypass authentication or access controls.
 
 PDF OCR fallback uses page rasterization and is optional. For best scanned-PDF results, install:
 - `pymupdf`

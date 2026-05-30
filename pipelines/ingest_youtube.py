@@ -1,6 +1,6 @@
 """YouTube transcript ingestor.
 
-Reads video IDs from data/raw/youtube/video_ids.txt,
+Reads video IDs from one or more files in data/raw/youtube/*.txt,
 fetches transcripts via youtube_transcript_api, and chunks them.
 """
 
@@ -40,6 +40,28 @@ class YouTubeIngestor:
         self.max_tokens = max_tokens_per_chunk
         self.ids_file = self.raw_dir / "video_ids.txt"
 
+    def _load_video_ids(self) -> list[str]:
+        """Load deduplicated video IDs from all text files in raw_dir."""
+        if not self.raw_dir.exists():
+            logger.warning("YouTube raw directory not found: %s", self.raw_dir)
+            return []
+
+        txt_files = sorted(self.raw_dir.glob("*.txt"))
+        if not txt_files:
+            logger.warning("No YouTube ID files found in: %s", self.raw_dir)
+            return []
+
+        seen: set[str] = set()
+        ids: list[str] = []
+        for txt_file in txt_files:
+            for line in txt_file.read_text(encoding="utf-8").splitlines():
+                value = line.strip()
+                if not value or value.startswith("#") or value in seen:
+                    continue
+                seen.add(value)
+                ids.append(value)
+        return ids
+
     def _fetch_transcript(self, video_id: str) -> str | None:
         """Fetch transcript text for a YouTube video ID."""
         try:
@@ -51,14 +73,7 @@ class YouTubeIngestor:
             return None
 
     def load_raw(self) -> list[RawDocument]:
-        if not self.ids_file.exists():
-            logger.warning("Video IDs file not found: %s", self.ids_file)
-            return []
-
-        video_ids = [
-            line.strip() for line in self.ids_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
+        video_ids = self._load_video_ids()
         logger.info("YouTubeIngestor: found %d video IDs", len(video_ids))
 
         docs: list[RawDocument] = []
