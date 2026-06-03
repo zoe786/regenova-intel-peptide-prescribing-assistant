@@ -19,7 +19,7 @@ def _settings() -> Settings:
 
 
 def _bearer_for_role(role: str) -> HTTPAuthorizationCredentials:
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=timezone.utc)  # noqa: UP017
     token = jwt.encode(
         {
             "sub": "user-123",

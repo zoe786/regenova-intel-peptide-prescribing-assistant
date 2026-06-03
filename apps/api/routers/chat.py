@@ -14,8 +14,8 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from apps.api.config import Settings, get_settings
-from apps.api.security import Role, get_chat_role
 from apps.api.schemas.chat import ChatRequest, ChatResponse
+from apps.api.security import Role, get_chat_role
 from apps.api.services.answer_composer import AnswerComposer
 from apps.api.services.audit_store import AuditStore
 from apps.api.services.citation_service import CitationService
