@@ -5,7 +5,7 @@
 REGENOVA-Intel uses two authentication mechanisms:
 
 ### JWT Bearer Tokens
-- Issued by the auth endpoint (TODO: implement `/auth/token`)
+- Issued by your external identity provider or auth service (this repository does not mint tokens)
 - Signed with `HS256` using `JWT_SECRET`
 - Claims: `sub` (user ID), `role` (`researcher | clinician | admin`), `exp`, `iat`
 - Expiry: 8 hours (configurable)
@@ -23,7 +23,7 @@ REGENOVA-Intel uses two authentication mechanisms:
 | Role | Description | Permissions |
 |------|-------------|-------------|
 | `anonymous` | No authentication | No access |
-| `researcher` | API key, no clinical context | Read-only chat (no patient context) |
+| `researcher` | JWT, verified role | Read-only chat (no patient context) |
 | `clinician` | JWT, verified role | Full chat, patient context, reconstitution (feature flag) |
 | `admin` | Admin API key or JWT | All above + ingest, source browser, config |
 

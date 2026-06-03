@@ -159,6 +159,8 @@ curl -X POST http://localhost:8000/chat \
   }'
 ```
 
+> In production, `/chat` requires either a valid `Authorization` JWT header or `X-Admin-Key`.
+
 **Response:**
 ```json
 {
@@ -209,9 +211,10 @@ make run-clinician
 | Variable       | Default                    | Description                    |
 |----------------|----------------------------|--------------------------------|
 | `API_BASE_URL` | `http://localhost:8000`    | FastAPI backend base URL       |
+| `CHAT_BEARER_TOKEN` | *(unset)*            | Optional JWT bearer token sent as `Authorization` on `/chat` calls |
 
 ```bash
-API_BASE_URL=http://my-server:8000 make run-clinician
+API_BASE_URL=http://my-server:8000 CHAT_BEARER_TOKEN=<jwt> make run-clinician
 ```
 
 ---
