@@ -580,6 +580,17 @@
       </span>
     </div>
 
+    <div class="form-group" style="margin-top:.9rem">
+      <label for="authTokenInput">JWT token (optional in dev; required in production)</label>
+      <input
+        id="authTokenInput"
+        type="password"
+        class="query-area"
+        style="min-height:auto;height:44px;padding:.65rem .85rem"
+        placeholder="Paste JWT token for authenticated chat access"
+      />
+    </div>
+
     <button class="btn-submit" id="submitBtn" onclick="handleSubmit()">
       <span id="btnIcon">🔍</span>
       <span id="btnText">Search Evidence Base</span>
@@ -661,6 +672,16 @@
 
   // ── API base URL (same origin) ───────────────────────────────────────────
   const API_BASE = '';
+  const AUTH_TOKEN_STORAGE_KEY = 'regenova_chat_bearer_token';
+
+  const authInput = document.getElementById('authTokenInput');
+  const savedToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  if (savedToken) authInput.value = savedToken;
+  authInput.addEventListener('change', function () {
+    const token = this.value.trim();
+    if (token) localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  });
 
   // ── Sync role badge ──────────────────────────────────────────────────────
   document.getElementById('roleSelect').addEventListener('change', function () {
@@ -684,13 +705,18 @@
     const role    = document.getElementById('roleSelect').value;
     const topK    = parseInt(document.getElementById('topKSlider').value, 10);
     const recon   = document.getElementById('reconstitutionToggle').checked;
+    const token   = authInput.value.trim();
+    if (token) localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = ['Bearer', token].join(' ');
 
     setLoading(true);
 
     try {
       const resp = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           query,
           role,

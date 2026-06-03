@@ -5,6 +5,7 @@ Runs on port 8502 by default.
 
 Environment variables:
     API_BASE_URL   — FastAPI base URL (default: http://localhost:8000)
+    CHAT_BEARER_TOKEN — Optional JWT bearer token for authenticated /chat access
 """
 
 from __future__ import annotations
@@ -20,8 +21,14 @@ import streamlit as st
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+CHAT_BEARER_TOKEN = os.getenv("CHAT_BEARER_TOKEN", "").strip()
 _CHAT_ENDPOINT = f"{API_BASE_URL}/chat"
 _HEALTH_ENDPOINT = f"{API_BASE_URL}/health"
+_API_HEADERS = (
+    {"Authorization": f"{'Bearer'} {CHAT_BEARER_TOKEN}"}
+    if CHAT_BEARER_TOKEN
+    else {}
+)
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -339,6 +346,7 @@ if query:
                 t0 = time.monotonic()
                 resp = requests.post(
                     _CHAT_ENDPOINT,
+                    headers=_API_HEADERS,
                     json={
                         "query": query,
                         "role": "clinician",

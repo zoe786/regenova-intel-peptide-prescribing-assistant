@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from apps.api.config import Settings, get_settings
 from apps.api.schemas.chat import ChatRequest, ChatResponse
+from apps.api.security import Role, get_chat_role
 from apps.api.services.answer_composer import AnswerComposer
 from apps.api.services.audit_store import AuditStore
 from apps.api.services.citation_service import CitationService
@@ -112,6 +113,7 @@ def _check_reconstitution_access(
 async def chat(
     request_body: ChatRequest,
     request: Request,
+    auth_role: Role | None = Depends(get_chat_role),
     settings: Settings = Depends(get_settings),
 ) -> ChatResponse:
     """Process a clinical query through the full RAG pipeline.
@@ -137,17 +139,35 @@ async def chat(
     start_ms = int(time.time() * 1000)
     request_id = str(uuid.uuid4())
 
+    if auth_role is None and settings.environment == "production":
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "type": "auth_required",
+                "title": "Authentication required",
+                "detail": "Provide a valid Authorization header or X-Admin-Key for /chat access in production.",
+            },
+        )
+
+    effective_role = auth_role or request_body.role
+    if auth_role and request_body.role != auth_role:
+        logger.info(
+            "Role override applied from auth token: requested=%s effective=%s",
+            request_body.role,
+            auth_role,
+        )
+
     logger.info(
         "Chat request: request_id=%s role=%s top_k=%d",
         request_id,
-        request_body.role,
+        effective_role,
         request_body.context_window_size,
     )
 
     # Gate reconstitution guidance
     _check_reconstitution_access(
         request_body.include_reconstitution,
-        request_body.role,
+        effective_role,
         settings,
     )
 
@@ -199,7 +219,7 @@ async def chat(
     # 6. Audit log
     _audit_log(
         request_id=request_id,
-        role=request_body.role,
+        role=effective_role,
         query=request_body.query,
         flags=flags,
         confidence=response.confidence,
@@ -219,7 +239,7 @@ async def chat(
                 "citations": len(response.citations),
                 "latency_ms": response.latency_ms,
             },
-            role=request_body.role,
+            role=effective_role,
             request_id=request_id,
             ip=client_ip,
         )
