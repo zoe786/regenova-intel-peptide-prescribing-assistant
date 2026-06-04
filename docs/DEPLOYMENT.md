@@ -54,11 +54,22 @@ docker compose logs -f api
 docker compose logs -f chromadb
 ```
 
-Services started:
+Default services started:
 | Service | Port | URL |
 |---------|------|-----|
 | API | 8000 | http://localhost:8000 |
+| Admin UI | 8501 | http://localhost:8501 |
+| Clinician UI | 8502 | http://localhost:8502 |
 | ChromaDB | 8001 | http://localhost:8001/api/v1 |
+
+Optional profile:
+
+```bash
+docker compose --profile neo4j up -d
+```
+
+| Service | Port | URL |
+|---------|------|-----|
 | Neo4j Browser | 7474 | http://localhost:7474 |
 | Neo4j Bolt | 7687 | bolt://localhost:7687 |
 

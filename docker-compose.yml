@@ -1,7 +1,5 @@
-version: "3.9"
-
 # ── Profile notes ──────────────────────────────────────────────────────────────
-# Default profile starts: api, chromadb, admin
+# Default profile starts: api, chromadb, admin, clinician
 # To include Neo4j:  docker compose --profile neo4j up -d
 
 services:
@@ -11,13 +9,13 @@ services:
     ports:
       - "127.0.0.1:8001:8000"   # Bind to loopback — not exposed publicly
     volumes:
-      - chroma_data:/chroma/chroma
+      - ./data/chroma_db:/chroma/chroma
     environment:
       - IS_PERSISTENT=TRUE
       - PERSIST_DIRECTORY=/chroma/chroma
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "bash", "-lc", "echo > /dev/tcp/127.0.0.1/8000"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -98,10 +96,32 @@ services:
       retries: 3
       start_period: 30s
 
+  clinician:
+    # Clinician-facing chat UI
+    build:
+      context: .
+      dockerfile: apps/clinician/Dockerfile
+    container_name: regenova_clinician
+    ports:
+      - "127.0.0.1:8502:8502"  # Bind to loopback — expose via reverse proxy if needed
+    env_file:
+      - .env
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8502/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # NOTE: For local dev, Neo4j Browser is available at http://localhost:7474
   # ChromaDB REST API is available at http://localhost:8001/api/v1/
 
 volumes:
-  chroma_data:
   neo4j_data:
   neo4j_logs:

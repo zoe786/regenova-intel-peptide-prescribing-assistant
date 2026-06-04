@@ -83,7 +83,7 @@ ENABLE_DOCS=false
 ## Step 4 — Start the stack
 
 ```bash
-# Start API, ChromaDB, and admin (Neo4j is off by default)
+# Start API, ChromaDB, admin UI, and clinician UI (Neo4j is off by default)
 docker compose up -d
 
 # Check that all containers are healthy
@@ -196,6 +196,20 @@ http://localhost:8501
 ```
 
 > Never expose port 8501 directly on the public internet. The Streamlit admin has no additional auth beyond the `ADMIN_API_KEY` it uses to call the API.
+
+---
+
+## Step 10 — Access the clinician dashboard
+
+The clinician UI is also loopback-bound by default:
+
+```bash
+# From your local machine:
+ssh -L 8502:localhost:8502 user@app.yourdomain.com
+
+# Then open in your browser:
+http://localhost:8502
+```
 
 ---
 
