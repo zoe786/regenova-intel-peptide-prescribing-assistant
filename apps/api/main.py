@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from apps.api.config import get_settings
 from apps.api.routers import audit as audit_router
+from apps.api.routers import autonomous as autonomous_router
 from apps.api.routers import chat, health, ingest, sources, upload
 from apps.api.services.audit_store import AuditStore
 
@@ -166,6 +167,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(ingest.router)
+    app.include_router(autonomous_router.router)
     app.include_router(upload.router)
     app.include_router(sources.router)
     app.include_router(audit_router.router)

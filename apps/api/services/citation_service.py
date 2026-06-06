@@ -64,13 +64,15 @@ class CitationService:
             if len(chunk.content) > _EXCERPT_MAX_LEN:
                 excerpt += "…"
 
+            provenance = dict(getattr(chunk.metadata, "extra_metadata", {}) or {})
             citation = Citation(
                 source_id=chunk.metadata.document_id or chunk.chunk_id,
-                source_name=chunk.metadata.source_name,
+                source_name=self._display_name(chunk),
                 url=chunk.metadata.source_url,
                 chunk_id=chunk.chunk_id,
                 evidence_tier=chunk.metadata.evidence_tier_default,
                 excerpt=excerpt,
+                provenance=provenance,
             )
             citations.append(citation)
             logger.debug("Citation [%d] → %s (tier %d)", idx, citation.source_name, citation.evidence_tier)
@@ -90,6 +92,41 @@ class CitationService:
 
         logger.info("Attached %d citations to answer", len(citations))
         return annotated_answer, citations
+
+    @staticmethod
+    def _display_name(chunk: NormalizedChunk) -> str:
+        """Build a human-readable attribution string from chunk provenance.
+
+        Falls back to the raw source_name when no richer provenance exists.
+        - YouTube: "<channel> — <video title>"
+        - PubMed:  "<source_name> (via search: <query>)"
+        """
+        meta = chunk.metadata
+        extra = getattr(meta, "extra_metadata", {}) or {}
+        source_type = (meta.source_type or "").lower()
+
+        if source_type == "youtube":
+            channel = extra.get("channel_name")
+            title = extra.get("video_title")
+            if channel and title:
+                return f"{channel} — {title}"
+            if title:
+                return str(title)
+            if channel:
+                return str(channel)
+
+        if source_type == "pubmed":
+            query = extra.get("pubmed_query")
+            if query:
+                return f"{meta.source_name} (via search: {query})"
+
+        if source_type == "skool_community":
+            community = extra.get("community_name")
+            author = extra.get("post_author")
+            if community and author:
+                return f"{meta.source_name} — {community} (post by {author})"
+
+        return meta.source_name
 
     def _validate_citation_integrity(
         self,

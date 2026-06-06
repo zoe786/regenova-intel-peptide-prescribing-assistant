@@ -54,6 +54,14 @@ class Citation(BaseModel):
     excerpt: str = Field(
         ..., max_length=500, description="Short excerpt from the cited chunk"
     )
+    provenance: dict = Field(
+        default_factory=dict,
+        description=(
+            "Source-specific origin details for display, e.g. "
+            "{'channel_name': ..., 'video_title': ...} for YouTube or "
+            "{'pubmed_query': ...} for an autonomous PubMed search."
+        ),
+    )
 
 
 class SafetyFlag(BaseModel):

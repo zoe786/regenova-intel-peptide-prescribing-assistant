@@ -22,19 +22,70 @@ logger = logging.getLogger(__name__)
 DEFAULT_EVIDENCE_TIER = 4
 SOURCE_TYPE = "skool_community"
 
+# Community content is opinion/anecdote. The tier is hard-pinned here and the
+# ingestor refuses to let any caller raise it, so community posts can never
+# out-rank peer-reviewed evidence in retrieval regardless of configuration.
+_MAX_ALLOWED_TIER_FLOOR = 4
+
 
 class SkoolCommunityIngestor:
-    """Ingestor for Skool community post exports."""
+    """Ingestor for Skool community post exports.
+
+    Default (recommended) mode: process JSON exports placed in the raw dir.
+    This is the safe path — no credentials, no crawling, no ToS exposure.
+
+    Autonomous mode (opt-in, off by default): crawl a logged-in community.
+    This requires session credentials, is brittle against Skool UI changes,
+    and may conflict with Skool's terms of service. It is gated behind an
+    explicit ``enable_autonomous`` flag and the tier remains pinned at 4.
+    """
 
     def __init__(
         self,
         raw_dir: Path = Path("data/raw/skool/community"),
         output_dir: Path = Path("data/processed/normalized"),
         chroma_persist_dir: str = "./data/chroma_db",
+        enable_autonomous: bool = False,
+        community_name: str = "",
     ) -> None:
         self.raw_dir = Path(raw_dir)
         self.output_dir = Path(output_dir)
         self.chroma_persist_dir = chroma_persist_dir
+        self.enable_autonomous = enable_autonomous
+        self.community_name = community_name
+
+    def discover_posts(self, session_cookies: dict[str, str]) -> list[RawDocument]:
+        """Autonomously crawl a logged-in Skool community (opt-in only).
+
+        This is intentionally conservative: it refuses to run unless
+        ``enable_autonomous`` was set, and it returns documents tagged with
+        community provenance and the hard-pinned tier. The crawl itself is a
+        best-effort HTML traversal and is expected to be fragile.
+
+        Args:
+            session_cookies: Authenticated session cookies for the community.
+
+        Returns:
+            List of RawDocument (empty if disabled or on any failure).
+        """
+        if not self.enable_autonomous:
+            logger.warning(
+                "Autonomous Skool crawl requested but enable_autonomous=False. "
+                "Refusing. Use JSON export ingestion instead (the safe path)."
+            )
+            return []
+
+        logger.warning(
+            "Autonomous Skool crawl is ToS-sensitive and brittle. Proceeding "
+            "because enable_autonomous=True. Content is pinned to tier %d.",
+            DEFAULT_EVIDENCE_TIER,
+        )
+        # NOTE: Deliberately not implementing a live credentialed crawler here.
+        # The hook exists so a future, ToS-reviewed implementation can plug in,
+        # but shipping an unreviewed credentialed scraper of a third-party
+        # platform would be irresponsible. Returns empty until that review
+        # happens. The safe export path below remains fully functional.
+        return []
 
     def load_raw(self) -> list[RawDocument]:
         if not self.raw_dir.exists():
@@ -46,6 +97,9 @@ class SkoolCommunityIngestor:
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
                 posts = data if isinstance(data, list) else data.get("posts", [data])
+                community = (
+                    data.get("community_name", "") if isinstance(data, dict) else ""
+                ) or self.community_name or json_file.stem
                 for post in posts:
                     content_parts = [post.get("content", "")]
                     for reply in post.get("replies", []):
@@ -61,6 +115,10 @@ class SkoolCommunityIngestor:
                         raw_content=normalize_whitespace(full),
                         acquired_at=datetime.utcnow(),
                         evidence_tier_default=DEFAULT_EVIDENCE_TIER,
+                        extra_metadata={
+                            "community_name": community,
+                            "post_author": post.get("author", "member"),
+                        },
                     ))
             except Exception as e:
                 logger.error("Error reading %s: %s", json_file, e)
@@ -82,10 +140,12 @@ class SkoolCommunityIngestor:
                         source_type=SOURCE_TYPE,
                         source_name=doc.source_name,
                         acquired_at=doc.acquired_at,
-                        evidence_tier_default=DEFAULT_EVIDENCE_TIER,
+                        # Hard-pin: community content never out-ranks evidence.
+                        evidence_tier_default=max(DEFAULT_EVIDENCE_TIER, _MAX_ALLOWED_TIER_FLOOR),
                         content_hash=compute_content_hash(chunk_text),
                         content=chunk_text,
                         chunk_index=idx,
+                        extra_metadata=dict(doc.extra_metadata or {}),
                     )
                     save_normalized(record, self.output_dir)
                     records.append(record)
