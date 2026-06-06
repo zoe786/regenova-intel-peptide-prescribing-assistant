@@ -57,6 +57,21 @@ class YouTubeAutonomousRequest(BaseModel):
     topic: str = Field(default="", description="Optional topic for relevance triage")
 
 
+class WebsiteAutonomousRequest(BaseModel):
+    seed_url: str = Field(..., description="Site URL to crawl (stays within this domain)")
+    evidence_tier: int = Field(
+        default=3, ge=1, le=5,
+        description="Tier for this site. Commercial/community sites should use 4-5.",
+    )
+    render_js: bool = Field(default=False, description="Use headless browser so JS content loads")
+    max_pages: int = Field(default=200, ge=1, le=2000)
+    # Optional authentication for login-protected sites.
+    login_url: str | None = Field(default=None, description="Form login POST URL")
+    login_username: str | None = None
+    login_password: str | None = None
+    cookies: dict[str, str] = Field(default_factory=dict, description="Pre-set session cookies")
+
+
 def _make_audit_sink(audit_store: AuditStore, request_ip: str):
     def _sink(record) -> None:
         audit_store.log_event(
@@ -90,6 +105,23 @@ def _youtube_fallback(settings, audit_store, channel, topic, ip, job_id):
     audit_store.update_ingest_job(
         job_id, status=record.status, total_chunks=record.chunks_ingested,
         results={"youtube": record.to_audit()},
+        error=record.errors[0] if record.errors else None,
+    )
+
+
+def _website_fallback(settings, audit_store, body, ip, job_id):
+    from pipelines.autonomous_orchestrator import AutonomousIngestionOrchestrator
+    audit_store.update_ingest_job(job_id, status="running")
+    orch = AutonomousIngestionOrchestrator(settings, audit_sink=_make_audit_sink(audit_store, ip))
+    record = orch.run_website(
+        seed_url=body.seed_url, evidence_tier=body.evidence_tier,
+        render_js=body.render_js, max_pages=body.max_pages,
+        cookies=body.cookies, login_url=body.login_url,
+        login_username=body.login_username, login_password=body.login_password,
+    )
+    audit_store.update_ingest_job(
+        job_id, status=record.status, total_chunks=record.chunks_ingested,
+        results={"website": record.to_audit()},
         error=record.errors[0] if record.errors else None,
     )
 
@@ -174,6 +206,55 @@ async def autonomous_youtube(
     return {
         "message": f"Autonomous YouTube ingestion {dispatch['mode']} for channel '{body.channel_name}'",
         "channel_name": body.channel_name,
+        "job_id": job_id,
+        "dispatch": dispatch,
+        "triggered_at": datetime.now(tz=timezone.utc).isoformat(),
+        "status": "queued",
+    }
+
+
+@router.post("/website", summary="Crawl + ingest an entire website, optionally behind login (admin only)")
+async def autonomous_website(
+    request: Request,
+    body: WebsiteAutonomousRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(_require_admin_key),
+    settings: Settings = Depends(get_settings),
+    audit_store: AuditStore = Depends(_get_audit_store),
+) -> dict:
+    # SSRF pre-check at the boundary; the crawler re-checks every URL too.
+    from pipelines.site_crawler import is_safe_url
+    if not is_safe_url(body.seed_url):
+        raise HTTPException(
+            status_code=422,
+            detail={"type": "unsafe_url", "title": "Seed URL is not a public http(s) address"},
+        )
+    ip = request.client.host if request.client else ""
+    job_id = audit_store.log_ingest_job(source_type="autonomous_website")
+    audit_store.log_event(
+        event_type="autonomous_trigger",
+        data={
+            "source": "website",
+            "seed_url": body.seed_url,
+            "evidence_tier": body.evidence_tier,
+            "authenticated": bool(body.login_url or body.cookies),
+            "job_id": job_id,
+        },
+        role="admin", ip=ip,
+    )
+    dispatch = await enqueue_or_run(
+        settings=settings,
+        task_name="ingest_website_task",
+        task_args=(
+            body.seed_url, body.evidence_tier, body.render_js, body.max_pages,
+            body.cookies, body.login_url, body.login_username, body.login_password, job_id,
+        ),
+        fallback=lambda: _website_fallback(settings, audit_store, body, ip, job_id),
+        background_tasks=background_tasks,
+    )
+    return {
+        "message": f"Website crawl {dispatch['mode']} for {body.seed_url}",
+        "seed_url": body.seed_url,
         "job_id": job_id,
         "dispatch": dispatch,
         "triggered_at": datetime.now(tz=timezone.utc).isoformat(),

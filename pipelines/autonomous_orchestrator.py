@@ -154,6 +154,56 @@ class AutonomousIngestionOrchestrator:
         self._emit(record)
         return record
 
+    # ── Website (full-site crawl) ─────────────────────────────────────────
+
+    def run_website(
+        self,
+        seed_url: str,
+        evidence_tier: int = 3,
+        render_js: bool = False,
+        max_pages: int = 200,
+        cookies: dict | None = None,
+        login_url: str | None = None,
+        login_username: str | None = None,
+        login_password: str | None = None,
+    ) -> AutonomousRunRecord:
+        """Crawl and ingest an entire website (optionally behind a login)."""
+        record = AutonomousRunRecord(
+            source="website",
+            trigger={
+                "seed_url": seed_url,
+                "evidence_tier": evidence_tier,
+                "render_js": render_js,
+                "authenticated": bool(login_url or cookies),
+            },
+        )
+        start = time.time()
+        try:
+            from pipelines.ingest_websites import WebsiteIngestor
+            ingestor = WebsiteIngestor(
+                chroma_persist_dir=getattr(self.settings, "chroma_persist_dir", "./data/chroma_db"),
+            )
+            result = ingestor.run_autonomous(
+                seed_url=seed_url,
+                evidence_tier=evidence_tier,
+                render_js=render_js,
+                max_pages=max_pages,
+                cookies=cookies,
+                login_url=login_url,
+                login_username=login_username,
+                login_password=login_password,
+            )
+            record.chunks_ingested = result.count
+            record.errors = list(result.errors)
+            record.status = "completed" if result.success else "failed"
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Autonomous website run failed: %s", exc)
+            record.status = "failed"
+            record.errors.append(str(exc))
+        record.duration_seconds = round(time.time() - start, 2)
+        self._emit(record)
+        return record
+
     # ── Skool ─────────────────────────────────────────────────────────────
 
     def run_skool_export(self) -> AutonomousRunRecord:

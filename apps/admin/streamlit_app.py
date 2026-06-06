@@ -503,6 +503,68 @@ elif page == "🤖 Autonomous":
 
     st.divider()
 
+    # ── Website full-site crawl ───────────────────────────────────────────
+    st.markdown(
+        '<div class="rg-card-title"><span class="rg-chip rg-chip-skool">Website</span> '
+        'Crawl &amp; ingest an entire site</div>'
+        '<div class="rg-card-sub">Enter a site URL. Every reachable in-domain page is crawled, '
+        'linked documents (PDF/DOC) are downloaded and ingested, and JS-heavy sites can be fully '
+        'rendered first. Optional login for membership/protected sites. Set the evidence tier to '
+        'match the source: commercial stores and course sites are Tier 4-5, not clinical evidence.</div>',
+        unsafe_allow_html=True,
+    )
+    ws_col1, ws_col2 = st.columns([3, 1])
+    with ws_col1:
+        ws_url = st.text_input("Site URL", placeholder="https://example.com")
+    with ws_col2:
+        ws_tier = st.selectbox("Evidence tier", [1, 2, 3, 4, 5], index=2,
+                               format_func=lambda t: f"Tier {t}")
+    ws_col3, ws_col4 = st.columns(2)
+    with ws_col3:
+        ws_render = st.checkbox("Render JavaScript (slower, loads all elements)", value=False)
+    with ws_col4:
+        ws_maxpages = st.number_input("Max pages", min_value=1, max_value=2000, value=200, step=50)
+
+    with st.expander("🔐 Login (optional — for membership/protected sites)", expanded=False):
+        st.markdown(
+            '<div class="rg-hint">⚠️ Only crawl sites you are authorised to access. '
+            'Scraping paid course platforms or content behind a login may violate their terms of '
+            'service. Credentials are sent to the backend over your configured connection and are '
+            'never written to logs.</div>',
+            unsafe_allow_html=True,
+        )
+        ws_login_url = st.text_input("Login form POST URL", placeholder="https://example.com/login")
+        ws_user = st.text_input("Username / email")
+        ws_pass = st.text_input("Password", type="password")
+
+    if st.button("🕸️ Crawl & Ingest Site", type="primary"):
+        if not ws_url.strip():
+            st.warning("Enter a site URL.")
+        else:
+            payload = {
+                "seed_url": ws_url.strip(),
+                "evidence_tier": int(ws_tier),
+                "render_js": bool(ws_render),
+                "max_pages": int(ws_maxpages),
+            }
+            if ws_login_url.strip():
+                payload.update({
+                    "login_url": ws_login_url.strip(),
+                    "login_username": ws_user,
+                    "login_password": ws_pass,
+                })
+            r = api_post("/autonomous/website", payload)
+            if "error" in r:
+                st.error(r["error"])
+            else:
+                mode = (r.get("dispatch", {}) or {}).get("mode", "queued")
+                tag = "on the durable queue" if mode == "queued" else "in-process (no Redis — dev mode)"
+                st.success(f"Website crawl dispatched {tag}. Track progress below.")
+                time.sleep(.5)
+                st.rerun()
+
+    st.divider()
+
     # ── Skool community exports ───────────────────────────────────────────
     st.markdown(
         '<div class="rg-card-title"><span class="rg-chip rg-chip-skool">Skool</span> '

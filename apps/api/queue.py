@@ -123,6 +123,40 @@ async def ingest_youtube_task(
     return record.to_audit()
 
 
+async def ingest_website_task(
+    ctx: dict,
+    seed_url: str,
+    evidence_tier: int = 3,
+    render_js: bool = False,
+    max_pages: int = 200,
+    cookies: dict | None = None,
+    login_url: str | None = None,
+    login_username: str | None = None,
+    login_password: str | None = None,
+    job_id: str = "",
+) -> dict:
+    """Worker task: full-site crawl + ingest (optionally authenticated)."""
+    import asyncio
+
+    audit_store = ctx.get("audit_store") or _worker_audit_store()
+    if job_id:
+        audit_store.update_ingest_job(job_id, status="running")
+    orch = _build_orchestrator(audit_store)
+    record = await asyncio.to_thread(
+        orch.run_website, seed_url, evidence_tier, render_js, max_pages,
+        cookies, login_url, login_username, login_password,
+    )
+    if job_id:
+        audit_store.update_ingest_job(
+            job_id,
+            status=record.status,
+            total_chunks=record.chunks_ingested,
+            results={"website": record.to_audit()},
+            error=record.errors[0] if record.errors else None,
+        )
+    return record.to_audit()
+
+
 async def ingest_skool_task(ctx: dict, job_id: str = "") -> dict:
     """Worker task: Skool export ingest."""
     import asyncio
@@ -172,7 +206,7 @@ class WorkerSettings:
         arq apps.api.queue.WorkerSettings
     """
 
-    functions = [ingest_pubmed_task, ingest_youtube_task, ingest_skool_task]
+    functions = [ingest_pubmed_task, ingest_youtube_task, ingest_website_task, ingest_skool_task]
     on_startup = _on_startup
     on_shutdown = _on_shutdown
 

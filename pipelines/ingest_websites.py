@@ -180,10 +180,11 @@ class WebsiteIngestor:
                         source_name=doc.source_name,
                         source_url=doc.source_url,
                         acquired_at=doc.acquired_at,
-                        evidence_tier_default=DEFAULT_EVIDENCE_TIER,
+                        evidence_tier_default=doc.evidence_tier_default,
                         content_hash=compute_content_hash(chunk_text),
                         content=chunk_text,
                         chunk_index=idx,
+                        extra_metadata=dict(doc.extra_metadata or {}),
                     )
                     save_normalized(record, self.output_dir)
                     records.append(record)
@@ -203,6 +204,138 @@ class WebsiteIngestor:
         result.duration_seconds = time.time() - start
         logger.info("%s", result)
         return result
+
+    def run_autonomous(
+        self,
+        seed_url: str,
+        evidence_tier: int = DEFAULT_EVIDENCE_TIER,
+        render_js: bool = False,
+        max_pages: int = 200,
+        cookies: dict[str, str] | None = None,
+        login_url: str | None = None,
+        login_username: str | None = None,
+        login_password: str | None = None,
+        ingest_attachments: bool = True,
+    ) -> IngestionResult:
+        """Crawl an entire site (optionally behind login) and ingest it.
+
+        Every reachable in-domain page is scraped and ingested. Discovered
+        document attachments (PDF/DOC/TXT) are downloaded and handed to the
+        DocumentIngestor. JS-rendered sites can be fully loaded via Playwright
+        by setting ``render_js=True``.
+
+        Args:
+            seed_url: Starting URL; the crawl stays within this domain.
+            evidence_tier: Tier for all pages from this site. Commercial /
+                community sites should use 4-5; this is the caller's
+                responsibility and the value is recorded in provenance.
+            render_js: Use a headless browser so dynamic content loads first.
+            max_pages: Hard cap on pages crawled.
+            cookies / login_*: Optional authentication.
+            ingest_attachments: Download + ingest linked documents.
+
+        Returns:
+            IngestionResult covering pages (and attachments, if enabled).
+        """
+        from pipelines.site_crawler import CrawlConfig, SiteCrawler
+
+        start = time.time()
+        config = CrawlConfig(
+            seed_url=seed_url,
+            max_pages=max_pages,
+            render_js=render_js,
+            cookies=cookies or {},
+            login_url=login_url,
+            login_username=login_username,
+            login_password=login_password,
+        )
+        crawl = SiteCrawler(config).crawl()
+
+        domain = urlparse(seed_url).hostname or seed_url
+        docs: list[RawDocument] = []
+        for page in crawl.pages:
+            text = clean_html(page["html"])
+            if not text.strip():
+                continue
+            docs.append(RawDocument(
+                source_type=SOURCE_TYPE,
+                source_name=domain,
+                raw_content=text,
+                acquired_at=datetime.utcnow(),
+                source_url=page["url"],
+                evidence_tier_default=evidence_tier,
+                extra_metadata={
+                    "crawl_seed": seed_url,
+                    "site_domain": domain,
+                    "page_url": page["url"],
+                    "rendered_js": render_js,
+                    "authenticated": bool(login_url or cookies),
+                },
+            ))
+
+        result = self.process(docs)
+        for err in crawl.errors:
+            result.errors.append(err)
+
+        # Ingest discovered attachments through the DocumentIngestor.
+        if ingest_attachments and crawl.attachments:
+            attach_result = self._ingest_attachments(crawl.attachments, config)
+            result.count += attach_result.count
+            result.errors.extend(attach_result.errors)
+            result.quarantined_documents.extend(attach_result.quarantined_documents)
+
+        result.duration_seconds = time.time() - start
+        logger.info("%s (autonomous site=%s, %d pages, %d attachments)",
+                    result, domain, len(crawl.pages), len(crawl.attachments))
+        return result
+
+    def _ingest_attachments(self, urls: list[str], config) -> IngestionResult:
+        """Download attachment URLs to a temp dir and run DocumentIngestor."""
+        import tempfile
+        from pipelines.site_crawler import is_safe_url
+
+        result = IngestionResult(source_type="document")
+        try:
+            import httpx  # type: ignore[import]
+        except ImportError:
+            result.errors.append("httpx not installed for attachment download")
+            return result
+
+        tmpdir = Path(tempfile.mkdtemp(prefix="regenova_attach_"))
+        client = httpx.Client(timeout=60, cookies=config.cookies or None,
+                              headers={"User-Agent": "REGENOVA-Intel/0.1"})
+        downloaded = 0
+        try:
+            for url in urls:
+                if not is_safe_url(url):
+                    continue
+                try:
+                    resp = client.get(url, follow_redirects=True)
+                    if not is_safe_url(str(resp.url)):
+                        continue
+                    resp.raise_for_status()
+                    name = Path(urlparse(url).path).name or f"file_{downloaded}"
+                    # Only keep the document types DocumentIngestor supports.
+                    if Path(name).suffix.lower() not in {".pdf", ".txt", ".md"}:
+                        continue
+                    (tmpdir / name).write_bytes(resp.content)
+                    downloaded += 1
+                except Exception as exc:  # noqa: BLE001
+                    result.errors.append(f"Attachment download failed: {type(exc).__name__}")
+            if downloaded:
+                from pipelines.ingest_documents import DocumentIngestor
+                doc_result = DocumentIngestor(
+                    raw_dir=tmpdir,
+                    output_dir=self.output_dir,
+                    chroma_persist_dir=self.chroma_persist_dir,
+                ).run()
+                result.count = doc_result.count
+                result.errors.extend(doc_result.errors)
+                result.quarantined_documents.extend(doc_result.quarantined_documents)
+            logger.info("Ingested %d/%d attachments", downloaded, len(urls))
+            return result
+        finally:
+            client.close()
 
 
 def main() -> None:
