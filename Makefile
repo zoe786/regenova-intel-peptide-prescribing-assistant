@@ -1,4 +1,4 @@
-.PHONY: install run-api run-admin run-clinician ingest-all reindex smoke-test test lint docker-up docker-down bootstrap clean
+.PHONY: install run-api run-worker run-admin run-clinician ingest-all reindex smoke-test test lint docker-up docker-down bootstrap clean
 
 PYTHON := python
 PIP := pip
@@ -10,6 +10,9 @@ install:
 
 run-api:
 	$(UVICORN) apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+run-worker:
+	arq apps.api.queue.WorkerSettings
 
 run-admin:
 	$(STREAMLIT) run apps/admin/streamlit_app.py --server.port 8501

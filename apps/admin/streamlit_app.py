@@ -456,7 +456,9 @@ elif page == "🤖 Autonomous":
             if "error" in r:
                 st.error(r["error"])
             else:
-                st.success(f"Queued PubMed search for {len(peptides)} peptide(s). Track progress below.")
+                mode = (r.get("dispatch", {}) or {}).get("mode", "queued")
+                tag = "on the durable queue" if mode == "queued" else "in-process (no Redis — dev mode)"
+                st.success(f"PubMed search for {len(peptides)} peptide(s) dispatched {tag}. Track progress below.")
                 time.sleep(.5)
                 st.rerun()
 
@@ -493,7 +495,9 @@ elif page == "🤖 Autonomous":
             if "error" in r:
                 st.error(r["error"])
             else:
-                st.success(f"Queued channel ingestion for '{yt_channel.strip()}'. Track progress below.")
+                mode = (r.get("dispatch", {}) or {}).get("mode", "queued")
+                tag = "on the durable queue" if mode == "queued" else "in-process (no Redis — dev mode)"
+                st.success(f"Channel ingestion for '{yt_channel.strip()}' dispatched {tag}. Track progress below.")
                 time.sleep(.5)
                 st.rerun()
 
@@ -513,7 +517,9 @@ elif page == "🤖 Autonomous":
         if "error" in r:
             st.error(r["error"])
         else:
-            st.success("Queued Skool export ingestion. Track progress below.")
+            mode = (r.get("dispatch", {}) or {}).get("mode", "queued")
+            tag = "on the durable queue" if mode == "queued" else "in-process (no Redis — dev mode)"
+            st.success(f"Skool export ingestion dispatched {tag}. Track progress below.")
             time.sleep(.5)
             st.rerun()
 

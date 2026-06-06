@@ -1,18 +1,22 @@
 """Autonomous ingestion endpoints (admin-only).
 
-Exposes the AutonomousIngestionOrchestrator over HTTP:
-- POST /autonomous/pubmed   {peptides: [...]}        → search + ingest PubMed
-- POST /autonomous/youtube  {channel_name, topic}    → ingest whole channel
-- POST /autonomous/skool                              → ingest JSON exports
+Exposes the AutonomousIngestionOrchestrator over HTTP. Long-running work is
+dispatched to the arq task queue when REDIS_URL is configured (durable,
+survives restarts); otherwise it falls back to in-process BackgroundTasks for
+local development.
 
-All endpoints require X-Admin-Key, run the work as a background task, and
-record a provenance audit event. They reuse the same LLM the chat API uses
-for query building / relevance triage (configured via Settings).
+- POST /autonomous/pubmed   {peptides: [...]}        -> search + ingest PubMed
+- POST /autonomous/youtube  {channel_name, topic}    -> ingest whole channel
+- POST /autonomous/skool                              -> ingest JSON exports
+
+All endpoints require X-Admin-Key, create an ingest_job record so progress is
+visible via /audit/ingest-jobs, and record a provenance audit event.
 """
 
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -20,6 +24,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from pydantic import BaseModel, Field
 
 from apps.api.config import Settings, get_settings
+from apps.api.queue import enqueue_or_run
 from apps.api.services.audit_store import AuditStore
 
 logger = logging.getLogger(__name__)
@@ -30,7 +35,6 @@ def _require_admin_key(
     x_admin_key: Annotated[str, Header(description="Admin API key")],
     settings: Settings = Depends(get_settings),
 ) -> None:
-    import secrets
     if not secrets.compare_digest(x_admin_key or "", settings.admin_api_key):
         logger.warning("Invalid admin key for autonomous endpoint")
         raise HTTPException(
@@ -64,22 +68,42 @@ def _make_audit_sink(audit_store: AuditStore, request_ip: str):
     return _sink
 
 
-def _pubmed_task(settings: Settings, audit_store: AuditStore, peptides: list[str], n: int, ip: str) -> None:
+# In-process fallback runners (used only when REDIS_URL is unset).
+
+def _pubmed_fallback(settings, audit_store, peptides, n, ip, job_id):
     from pipelines.autonomous_orchestrator import AutonomousIngestionOrchestrator
+    audit_store.update_ingest_job(job_id, status="running")
     orch = AutonomousIngestionOrchestrator(settings, audit_sink=_make_audit_sink(audit_store, ip))
-    orch.run_pubmed(peptides, max_results_per_peptide=n)
+    record = orch.run_pubmed(peptides, max_results_per_peptide=n)
+    audit_store.update_ingest_job(
+        job_id, status=record.status, total_chunks=record.chunks_ingested,
+        results={"pubmed": record.to_audit()},
+        error=record.errors[0] if record.errors else None,
+    )
 
 
-def _youtube_task(settings: Settings, audit_store: AuditStore, channel: str, topic: str, ip: str) -> None:
+def _youtube_fallback(settings, audit_store, channel, topic, ip, job_id):
     from pipelines.autonomous_orchestrator import AutonomousIngestionOrchestrator
+    audit_store.update_ingest_job(job_id, status="running")
     orch = AutonomousIngestionOrchestrator(settings, audit_sink=_make_audit_sink(audit_store, ip))
-    orch.run_youtube(channel, topic=topic)
+    record = orch.run_youtube(channel, topic=topic)
+    audit_store.update_ingest_job(
+        job_id, status=record.status, total_chunks=record.chunks_ingested,
+        results={"youtube": record.to_audit()},
+        error=record.errors[0] if record.errors else None,
+    )
 
 
-def _skool_task(settings: Settings, audit_store: AuditStore, ip: str) -> None:
+def _skool_fallback(settings, audit_store, ip, job_id):
     from pipelines.autonomous_orchestrator import AutonomousIngestionOrchestrator
+    audit_store.update_ingest_job(job_id, status="running")
     orch = AutonomousIngestionOrchestrator(settings, audit_sink=_make_audit_sink(audit_store, ip))
-    orch.run_skool_export()
+    record = orch.run_skool_export()
+    audit_store.update_ingest_job(
+        job_id, status=record.status, total_chunks=record.chunks_ingested,
+        results={"skool": record.to_audit()},
+        error=record.errors[0] if record.errors else None,
+    )
 
 
 @router.post("/pubmed", summary="Autonomously search + ingest PubMed for peptides (admin only)")
@@ -92,12 +116,26 @@ async def autonomous_pubmed(
     audit_store: AuditStore = Depends(_get_audit_store),
 ) -> dict:
     ip = request.client.host if request.client else ""
-    background_tasks.add_task(
-        _pubmed_task, settings, audit_store, body.peptides, body.max_results_per_peptide, ip
+    job_id = audit_store.log_ingest_job(source_type="autonomous_pubmed")
+    audit_store.log_event(
+        event_type="autonomous_trigger",
+        data={"source": "pubmed", "peptides": body.peptides, "job_id": job_id},
+        role="admin", ip=ip,
+    )
+    dispatch = await enqueue_or_run(
+        settings=settings,
+        task_name="ingest_pubmed_task",
+        task_args=(body.peptides, body.max_results_per_peptide, job_id),
+        fallback=lambda: _pubmed_fallback(
+            settings, audit_store, body.peptides, body.max_results_per_peptide, ip, job_id
+        ),
+        background_tasks=background_tasks,
     )
     return {
-        "message": f"Autonomous PubMed ingestion queued for {len(body.peptides)} peptide(s)",
+        "message": f"Autonomous PubMed ingestion {dispatch['mode']} for {len(body.peptides)} peptide(s)",
         "peptides": body.peptides,
+        "job_id": job_id,
+        "dispatch": dispatch,
         "triggered_at": datetime.now(tz=timezone.utc).isoformat(),
         "status": "queued",
     }
@@ -118,10 +156,26 @@ async def autonomous_youtube(
             detail={"type": "config_error", "title": "YOUTUBE_API_KEY is not configured"},
         )
     ip = request.client.host if request.client else ""
-    background_tasks.add_task(_youtube_task, settings, audit_store, body.channel_name, body.topic, ip)
+    job_id = audit_store.log_ingest_job(source_type="autonomous_youtube")
+    audit_store.log_event(
+        event_type="autonomous_trigger",
+        data={"source": "youtube", "channel_name": body.channel_name, "job_id": job_id},
+        role="admin", ip=ip,
+    )
+    dispatch = await enqueue_or_run(
+        settings=settings,
+        task_name="ingest_youtube_task",
+        task_args=(body.channel_name, body.topic, job_id),
+        fallback=lambda: _youtube_fallback(
+            settings, audit_store, body.channel_name, body.topic, ip, job_id
+        ),
+        background_tasks=background_tasks,
+    )
     return {
-        "message": f"Autonomous YouTube ingestion queued for channel '{body.channel_name}'",
+        "message": f"Autonomous YouTube ingestion {dispatch['mode']} for channel '{body.channel_name}'",
         "channel_name": body.channel_name,
+        "job_id": job_id,
+        "dispatch": dispatch,
         "triggered_at": datetime.now(tz=timezone.utc).isoformat(),
         "status": "queued",
     }
@@ -136,9 +190,23 @@ async def autonomous_skool(
     audit_store: AuditStore = Depends(_get_audit_store),
 ) -> dict:
     ip = request.client.host if request.client else ""
-    background_tasks.add_task(_skool_task, settings, audit_store, ip)
+    job_id = audit_store.log_ingest_job(source_type="autonomous_skool")
+    audit_store.log_event(
+        event_type="autonomous_trigger",
+        data={"source": "skool", "job_id": job_id},
+        role="admin", ip=ip,
+    )
+    dispatch = await enqueue_or_run(
+        settings=settings,
+        task_name="ingest_skool_task",
+        task_args=(job_id,),
+        fallback=lambda: _skool_fallback(settings, audit_store, ip, job_id),
+        background_tasks=background_tasks,
+    )
     return {
-        "message": "Skool export ingestion queued",
+        "message": f"Skool export ingestion {dispatch['mode']}",
+        "job_id": job_id,
+        "dispatch": dispatch,
         "triggered_at": datetime.now(tz=timezone.utc).isoformat(),
         "status": "queued",
     }
