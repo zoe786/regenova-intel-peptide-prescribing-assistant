@@ -60,6 +60,42 @@ st.markdown("""
 .status-ok      { color:#10b981; font-weight:600; }
 .status-error   { color:#ef4444; font-weight:600; }
 .status-running { color:#f59e0b; font-weight:600; }
+
+/* ── Modernization pass ─────────────────────────────────────────── */
+:root {
+  --rg-primary:#4f46e5; --rg-primary-dark:#4338ca;
+  --rg-surface:#ffffff; --rg-border:#e2e8f0; --rg-muted:#64748b;
+}
+/* Card container for grouping controls */
+.rg-card {
+  background:var(--rg-surface); border:1px solid var(--rg-border);
+  border-radius:14px; padding:1.1rem 1.25rem; margin:.5rem 0 1rem;
+  box-shadow:0 1px 2px rgba(15,23,42,.04), 0 1px 3px rgba(15,23,42,.06);
+}
+.rg-card-title { font-weight:700; font-size:1.02rem; color:#0f172a; margin-bottom:.15rem; display:flex; align-items:center; gap:.45rem; }
+.rg-card-sub { color:var(--rg-muted); font-size:.83rem; margin-bottom:.6rem; }
+/* Source chips */
+.rg-chip { display:inline-flex; align-items:center; gap:.3rem; padding:3px 10px; border-radius:999px;
+  font-size:.74rem; font-weight:600; border:1px solid var(--rg-border); }
+.rg-chip-pubmed { background:#eef5ff; color:#1a5276; border-color:#cfe0f5; }
+.rg-chip-youtube { background:#fdeeee; color:#b3261e; border-color:#f6d4d2; }
+.rg-chip-skool { background:#fff7e6; color:#7d6608; border-color:#f3e2b8; }
+/* Buttons: softer, modern */
+.stButton > button[kind="primary"] {
+  background:var(--rg-primary); border:none; border-radius:10px; font-weight:600;
+  transition:background .15s ease, transform .05s ease;
+}
+.stButton > button[kind="primary"]:hover { background:var(--rg-primary-dark); }
+.stButton > button[kind="primary"]:active { transform:translateY(1px); }
+.stButton > button:not([kind="primary"]) { border-radius:10px; border:1px solid var(--rg-border); }
+/* Sidebar nav as pill list */
+section[data-testid="stSidebar"] div[role="radiogroup"] > label {
+  padding:.45rem .65rem; border-radius:10px; margin:1px 0; transition:background .12s ease;
+}
+section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover { background:#eef2ff; }
+/* Metric cards a touch tighter */
+div[data-testid="stMetric"] { background:#f8fafc; border:1px solid var(--rg-border); border-radius:12px; padding:.6rem .8rem; }
+.rg-hint { background:#f1f5f9; border-left:3px solid var(--rg-primary); padding:.5rem .75rem; border-radius:8px; color:#334155; font-size:.84rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,6 +110,7 @@ with st.sidebar:
         [
             "💬 Chat",
             "📤 Upload",
+            "🤖 Autonomous",
             "📊 Ingest Jobs",
             "📚 Source Manager",
             "🔍 Chunk Explorer",
@@ -375,6 +412,146 @@ elif page == "📤 Upload":
                         f"✅ `{url_input.strip()}` registered — "
                         f"ingestion job `{result.get('job_id','')}` queued"
                     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: 🤖 Autonomous
+# ═══════════════════════════════════════════════════════════════════════════════
+
+elif page == "🤖 Autonomous":
+    st.markdown('<h1 class="main-header">🤖 Autonomous Ingestion</h1>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="sub-caption">Let the assistant discover and ingest sources on its own. '
+        'It uses the same LLM as chat to build searches and triage relevance. '
+        'Every run is recorded in the audit log with full provenance.</p>',
+        unsafe_allow_html=True,
+    )
+
+    # ── PubMed autonomous search ──────────────────────────────────────────
+    st.markdown(
+        '<div class="rg-card-title"><span class="rg-chip rg-chip-pubmed">PubMed</span> '
+        'Search &amp; ingest by peptide</div>'
+        '<div class="rg-card-sub">Enter peptide names (one per line). The assistant builds an '
+        'Entrez query for each, runs the search, and ingests the abstracts as Tier-1 evidence. '
+        'The search query is stored so citations can show how each paper was found.</div>',
+        unsafe_allow_html=True,
+    )
+    pm_col1, pm_col2 = st.columns([3, 1])
+    with pm_col1:
+        peptides_raw = st.text_area(
+            "Peptides",
+            placeholder="BPC-157\nTB-500\nIpamorelin",
+            height=120,
+            label_visibility="collapsed",
+        )
+    with pm_col2:
+        pm_max = st.number_input("Max results / peptide", min_value=1, max_value=200, value=50, step=10)
+        pm_go = st.button("🔍 Search & Ingest", type="primary", use_container_width=True)
+    if pm_go:
+        peptides = [p.strip() for p in peptides_raw.splitlines() if p.strip()]
+        if not peptides:
+            st.warning("Enter at least one peptide.")
+        else:
+            r = api_post("/autonomous/pubmed", {"peptides": peptides, "max_results_per_peptide": int(pm_max)})
+            if "error" in r:
+                st.error(r["error"])
+            else:
+                st.success(f"Queued PubMed search for {len(peptides)} peptide(s). Track progress below.")
+                time.sleep(.5)
+                st.rerun()
+
+    st.divider()
+
+    # ── YouTube channel ingestion ─────────────────────────────────────────
+    st.markdown(
+        '<div class="rg-card-title"><span class="rg-chip rg-chip-youtube">YouTube</span> '
+        'Ingest an entire channel</div>'
+        '<div class="rg-card-sub">Paste a channel name. Every uploaded video is discovered via the '
+        'YouTube Data API, transcripts are fetched, and citations reference the channel and video title. '
+        'An optional topic enables relevance triage to skip off-topic videos. Tier-3 educational evidence.</div>',
+        unsafe_allow_html=True,
+    )
+    yt_col1, yt_col2, yt_col3 = st.columns([2, 2, 1])
+    with yt_col1:
+        yt_channel = st.text_input("Channel name", placeholder="e.g. Peptide Science")
+    with yt_col2:
+        yt_topic = st.text_input("Topic for triage (optional)", placeholder="e.g. peptides")
+    with yt_col3:
+        st.write("")
+        st.write("")
+        yt_go = st.button("📺 Ingest Channel", type="primary", use_container_width=True)
+    st.markdown(
+        '<div class="rg-hint">⚠️ Auto-generated transcripts can mis-transcribe drug names and dosages. '
+        'This content is Tier-3 and should be weighed accordingly.</div>',
+        unsafe_allow_html=True,
+    )
+    if yt_go:
+        if not yt_channel.strip():
+            st.warning("Enter a channel name.")
+        else:
+            r = api_post("/autonomous/youtube", {"channel_name": yt_channel.strip(), "topic": yt_topic.strip()})
+            if "error" in r:
+                st.error(r["error"])
+            else:
+                st.success(f"Queued channel ingestion for '{yt_channel.strip()}'. Track progress below.")
+                time.sleep(.5)
+                st.rerun()
+
+    st.divider()
+
+    # ── Skool community exports ───────────────────────────────────────────
+    st.markdown(
+        '<div class="rg-card-title"><span class="rg-chip rg-chip-skool">Skool</span> '
+        'Ingest community exports</div>'
+        '<div class="rg-card-sub">Processes Skool community JSON exports placed in the raw data directory. '
+        'This is the safe path — no credentials, no crawling. Community content is hard-pinned to Tier-4 '
+        'so it can never outrank peer-reviewed evidence.</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("👥 Ingest Skool Exports", type="primary"):
+        r = api_post("/autonomous/skool", {})
+        if "error" in r:
+            st.error(r["error"])
+        else:
+            st.success("Queued Skool export ingestion. Track progress below.")
+            time.sleep(.5)
+            st.rerun()
+
+    st.divider()
+
+    # ── Recent autonomous runs (from audit log) ───────────────────────────
+    st.subheader("Recent autonomous runs")
+    if st.button("🔄 Refresh runs"):
+        st.rerun()
+    runs = api_get("/audit/logs", params={"event_type": "autonomous_ingest", "limit": 25})
+    if "error" in runs:
+        st.error(f"Could not reach API: {runs['error']}")
+    else:
+        events = runs.get("events", [])
+        if not events:
+            st.info("No autonomous runs yet. Trigger one above.")
+        else:
+            for ev in events:
+                d = ev.get("data", {}) or {}
+                source = d.get("source", "?")
+                status = d.get("status", "?")
+                icon = status_icon(status)
+                chunks = d.get("chunks_ingested", 0)
+                ts = ev.get("timestamp", ev.get("created_at", ""))
+                chip_cls = {"pubmed": "rg-chip-pubmed", "youtube": "rg-chip-youtube", "skool": "rg-chip-skool"}.get(source, "")
+                with st.expander(f"{icon} {source} · {chunks} chunks · {str(ts)[:19]}", expanded=False):
+                    st.markdown(f'<span class="rg-chip {chip_cls}">{_escape_html(source)}</span>', unsafe_allow_html=True)
+                    trigger = d.get("trigger", {})
+                    if trigger:
+                        st.caption("Trigger")
+                        st.json(trigger)
+                    errors = d.get("errors", [])
+                    if errors:
+                        st.error("Errors: " + "; ".join(str(e) for e in errors[:5]))
+                    decisions = d.get("llm_decisions", [])
+                    if decisions:
+                        st.caption(f"Provenance ({len(decisions)} items)")
+                        st.json(decisions[:25])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
