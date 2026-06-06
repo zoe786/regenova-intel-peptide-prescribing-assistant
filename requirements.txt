@@ -25,7 +25,11 @@ biopython>=1.83
 
 # Scraping / ingestion
 youtube-transcript-api>=0.6.2
+google-api-python-client>=2.100.0
 beautifulsoup4>=4.12.3
+# Optional: headless browser for JS-rendered site crawling.
+# After install run: playwright install chromium
+playwright>=1.40.0
 requests>=2.31.0
 httpx>=0.27.0
 
@@ -39,6 +43,10 @@ pytest-asyncio>=0.23.7
 # Auth
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
+
+# Task queue
+arq>=0.26.0
+redis>=5.0.0
 
 # Utilities
 rich>=13.7.1

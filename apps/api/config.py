@@ -109,6 +109,25 @@ class Settings(BaseSettings):
         default="./data/audit.db", description="Path to SQLite audit database"
     )
 
+    # ── Task Queue (arq / Redis) ──────────────────────────────────────────
+    redis_url: str = Field(
+        default="",
+        description=(
+            "Redis connection URL for the arq task queue (e.g. "
+            "redis://localhost:6379/0). When empty, long-running ingestion "
+            "falls back to in-process FastAPI BackgroundTasks (dev only)."
+        ),
+    )
+    arq_job_timeout: int = Field(
+        default=3600,
+        description="Max seconds an enqueued ingestion job may run before timeout",
+    )
+
+    @property
+    def queue_enabled(self) -> bool:
+        """True if a Redis URL is configured (durable queue available)."""
+        return bool(self.redis_url.strip())
+
     # ── Frontend ──────────────────────────────────────────────────────────
     frontend_dir: str = Field(
         default="./apps/frontend", description="Path to prescriber-facing static frontend"

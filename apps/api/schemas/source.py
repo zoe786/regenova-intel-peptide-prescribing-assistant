@@ -34,6 +34,14 @@ class SourceMetadata(BaseModel):
     document_id: str = Field(
         ..., description="Unique identifier for the parent document"
     )
+    extra_metadata: dict = Field(
+        default_factory=dict,
+        description=(
+            "Source-specific provenance carried through from ingestion "
+            "(e.g. channel_name, video_title, pubmed_query, post_author). "
+            "Surfaced in citations so answers can reference the exact origin."
+        ),
+    )
 
 
 class NormalizedChunk(BaseModel):

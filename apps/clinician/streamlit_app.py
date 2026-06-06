@@ -314,6 +314,18 @@ def _render_assistant_meta(meta: dict) -> None:
                 )
                 if excerpt:
                     st.caption(f'"{excerpt}"')
+                prov = c.get("provenance", {}) or {}
+                prov_bits = []
+                if prov.get("channel_name"):
+                    prov_bits.append(f"Channel: {_escape_html(prov['channel_name'])}")
+                if prov.get("video_title"):
+                    prov_bits.append(f"Video: {_escape_html(prov['video_title'])}")
+                if prov.get("pubmed_query"):
+                    prov_bits.append(f"Found via search: {_escape_html(prov['pubmed_query'])}")
+                if prov.get("community_name"):
+                    prov_bits.append(f"Community: {_escape_html(prov['community_name'])}")
+                if prov_bits:
+                    st.caption("· ".join(prov_bits))
                 if i < len(citations):
                     st.divider()
 

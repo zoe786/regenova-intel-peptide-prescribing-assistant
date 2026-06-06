@@ -109,6 +109,17 @@ class RetrievalService:
             for doc, meta, dist in zip(documents, metadatas, distances):
                 similarity = 1.0 - float(dist)  # convert cosine distance → similarity
                 try:
+                    # Anything beyond the known core fields is source-specific
+                    # provenance (channel_name, video_title, pubmed_query, ...)
+                    # that ingestion stored via extra_metadata.
+                    _CORE_META_KEYS = {
+                        "source_type", "source_name", "source_url", "acquired_at",
+                        "published_at", "evidence_tier_default", "jurisdiction",
+                        "content_hash", "document_id", "chunk_id",
+                    }
+                    extra_meta = {
+                        k: v for k, v in meta.items() if k not in _CORE_META_KEYS
+                    }
                     source_meta = SourceMetadata(
                         source_type=meta.get("source_type", "unknown"),
                         source_name=meta.get("source_name", "Unknown Source"),
@@ -119,6 +130,7 @@ class RetrievalService:
                         jurisdiction=meta.get("jurisdiction"),
                         content_hash=meta.get("content_hash", ""),
                         document_id=meta.get("document_id", ""),
+                        extra_metadata=extra_meta,
                     )
                     chunk = NormalizedChunk(
                         chunk_id=meta.get("chunk_id", ""),

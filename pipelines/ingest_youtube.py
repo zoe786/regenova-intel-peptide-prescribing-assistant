@@ -25,7 +25,14 @@ YOUTUBE_BASE_URL = "https://www.youtube.com/watch?v="
 
 
 class YouTubeIngestor:
-    """Ingestor for YouTube video transcripts."""
+    """Ingestor for YouTube video transcripts.
+
+    Supports two modes:
+    - File mode (default): read video IDs from video_ids.txt.
+    - Autonomous mode: given a channel name, enumerate every uploaded video
+      via the YouTube Data API, capture channel + title provenance, optionally
+      triage relevance with the LLM, then fetch transcripts and ingest.
+    """
 
     def __init__(
         self,
@@ -33,12 +40,110 @@ class YouTubeIngestor:
         output_dir: Path = Path("data/processed/normalized"),
         chroma_persist_dir: str = "./data/chroma_db",
         max_tokens_per_chunk: int = 512,
+        youtube_api_key: str = "",
+        llm_assistant: "LLMAssistant | None" = None,
     ) -> None:
         self.raw_dir = Path(raw_dir)
         self.output_dir = Path(output_dir)
         self.chroma_persist_dir = chroma_persist_dir
         self.max_tokens = max_tokens_per_chunk
         self.ids_file = self.raw_dir / "video_ids.txt"
+        self.youtube_api_key = youtube_api_key
+        self.llm = llm_assistant
+        # video_id -> {channel_name, channel_id, video_title, ...}
+        self._discovery_provenance: dict[str, dict[str, str]] = {}
+
+    # ── Autonomous discovery via YouTube Data API ─────────────────────────
+
+    def discover_channel_videos(self, channel_name: str, topic: str = "") -> list[str]:
+        """Enumerate every uploaded video for a channel name.
+
+        Resolves the channel name to its uploads playlist, paginates all
+        items, captures channel/title provenance, and (when an LLM is
+        available and a topic is given) drops clearly off-topic videos.
+
+        Args:
+            channel_name: Channel display name to resolve.
+            topic: Optional topic for relevance triage (e.g. "peptides").
+
+        Returns:
+            List of discovered video IDs (after optional triage).
+        """
+        if not self.youtube_api_key:
+            logger.error("YOUTUBE_API_KEY not set — cannot discover channel videos")
+            return []
+        try:
+            from googleapiclient.discovery import build  # type: ignore[import]
+        except ImportError:
+            logger.error("google-api-python-client not installed — channel discovery unavailable")
+            return []
+
+        try:
+            youtube = build("youtube", "v3", developerKey=self.youtube_api_key)
+
+            # 1. Resolve channel name → channel id + uploads playlist.
+            search = youtube.search().list(
+                q=channel_name, type="channel", part="snippet", maxResults=1
+            ).execute()
+            items = search.get("items", [])
+            if not items:
+                logger.warning("No channel found for '%s'", channel_name)
+                return []
+            channel_id = items[0]["snippet"]["channelId"]
+            resolved_name = items[0]["snippet"]["title"]
+
+            channels = youtube.channels().list(
+                id=channel_id, part="contentDetails"
+            ).execute()
+            uploads = (
+                channels["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+            )
+
+            # 2. Paginate the uploads playlist for every video.
+            video_ids: list[str] = []
+            page_token = None
+            from pipelines.common.llm_assistant import LLMAssistant
+            assistant = self.llm or LLMAssistant()
+
+            while True:
+                pl = youtube.playlistItems().list(
+                    playlistId=uploads,
+                    part="snippet,contentDetails",
+                    maxResults=50,
+                    pageToken=page_token,
+                ).execute()
+                for it in pl.get("items", []):
+                    vid = it["contentDetails"]["videoId"]
+                    title = it["snippet"]["title"]
+                    published = it["snippet"].get("publishedAt", "")
+
+                    # Optional relevance triage before we spend transcript cost.
+                    if topic and assistant.available:
+                        decision = assistant.is_relevant(topic, title)
+                        if not decision.value:
+                            logger.info("Triage dropped off-topic video: %s", title)
+                            continue
+
+                    self._discovery_provenance[vid] = {
+                        "channel_name": resolved_name,
+                        "channel_id": channel_id,
+                        "video_title": title,
+                        "video_published_at": published,
+                    }
+                    video_ids.append(vid)
+
+                page_token = pl.get("nextPageToken")
+                if not page_token:
+                    break
+
+            logger.info(
+                "Discovered %d videos for channel '%s' (%s)",
+                len(video_ids), resolved_name, channel_id,
+            )
+            return video_ids
+        except Exception as exc:
+            logger.error("Channel discovery failed for '%s': %s", channel_name, exc)
+            return []
 
     def _fetch_transcript(self, video_id: str) -> str | None:
         """Fetch transcript text for a YouTube video ID."""
@@ -50,16 +155,16 @@ class YouTubeIngestor:
             logger.error("Failed to fetch transcript for %s: %s", video_id, exc)
             return None
 
-    def load_raw(self) -> list[RawDocument]:
-        if not self.ids_file.exists():
-            logger.warning("Video IDs file not found: %s", self.ids_file)
-            return []
-
-        video_ids = [
-            line.strip() for line in self.ids_file.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
-        logger.info("YouTubeIngestor: found %d video IDs", len(video_ids))
+    def load_raw(self, video_ids: list[str] | None = None) -> list[RawDocument]:
+        if video_ids is None:
+            if not self.ids_file.exists():
+                logger.warning("Video IDs file not found: %s", self.ids_file)
+                return []
+            video_ids = [
+                line.strip() for line in self.ids_file.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
+            logger.info("YouTubeIngestor: found %d video IDs", len(video_ids))
 
         docs: list[RawDocument] = []
         for vid_id in video_ids:
@@ -67,13 +172,28 @@ class YouTubeIngestor:
             if not transcript:
                 continue
             url = f"{YOUTUBE_BASE_URL}{vid_id}"
+            prov = dict(self._discovery_provenance.get(vid_id, {}))
+            # Human-readable name for citations; falls back to the ID.
+            channel = prov.get("channel_name")
+            title = prov.get("video_title")
+            if channel and title:
+                source_name = f"{channel} — {title}"
+            elif title:
+                source_name = title
+            else:
+                source_name = f"YouTube:{vid_id}"
+            # Record that this transcript was auto-generated/best-effort, so
+            # the tier and provenance make the source quality explicit.
+            prov.setdefault("transcript_source", "youtube_transcript_api")
+
             docs.append(RawDocument(
                 source_type=SOURCE_TYPE,
-                source_name=f"YouTube:{vid_id}",
+                source_name=source_name,
                 raw_content=normalize_whitespace(transcript),
                 acquired_at=datetime.utcnow(),
                 source_url=url,
                 evidence_tier_default=DEFAULT_EVIDENCE_TIER,
+                extra_metadata=prov,
             ))
 
         return docs
@@ -99,6 +219,7 @@ class YouTubeIngestor:
                         content_hash=compute_content_hash(chunk_text),
                         content=chunk_text,
                         chunk_index=idx,
+                        extra_metadata=dict(doc.extra_metadata or {}),
                     )
                     save_normalized(record, self.output_dir)
                     records.append(record)
@@ -117,6 +238,24 @@ class YouTubeIngestor:
         result = self.process(docs)
         result.duration_seconds = time.time() - start
         logger.info("%s", result)
+        return result
+
+    def run_autonomous(self, channel_name: str, topic: str = "") -> IngestionResult:
+        """Discover and ingest every video from a channel.
+
+        Args:
+            channel_name: Channel display name (as pasted by the user).
+            topic: Optional topic for relevance triage.
+
+        Returns:
+            IngestionResult summarising the run.
+        """
+        start = time.time()
+        video_ids = self.discover_channel_videos(channel_name, topic=topic)
+        docs = self.load_raw(video_ids=video_ids)
+        result = self.process(docs)
+        result.duration_seconds = time.time() - start
+        logger.info("%s (autonomous channel=%s)", result, channel_name)
         return result
 
 
