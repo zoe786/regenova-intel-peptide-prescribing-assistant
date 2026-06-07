@@ -96,3 +96,6 @@ logs/
 
 # OS
 Thumbs.db
+
+data/*.db
+*.patch

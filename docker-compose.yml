@@ -154,6 +154,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./data:/app/data
+    extra_hosts:
+      # Lets the container reach a proxy/tunnel running on the host
+      # (e.g. YT_TRANSCRIPT_PROXY=http://host.docker.internal:8888).
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
