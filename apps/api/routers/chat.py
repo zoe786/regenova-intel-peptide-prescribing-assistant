@@ -19,6 +19,7 @@ from apps.api.security import Role, get_chat_role
 from apps.api.services.answer_composer import AnswerComposer
 from apps.api.services.audit_store import AuditStore
 from apps.api.services.citation_service import CitationService
+from apps.api.services.grounding_service import GroundingService
 from apps.api.services.ranking_service import RankingService
 from apps.api.services.retrieval_service import RetrievalService
 from apps.api.services.safety_rules import SafetyRuleEngine
@@ -31,6 +32,7 @@ _retrieval_service: RetrievalService | None = None
 _ranking_service = RankingService()
 _safety_engine = SafetyRuleEngine()
 _citation_service = CitationService()
+_grounding_service = GroundingService()
 
 
 def _get_retrieval_service(settings: Settings) -> RetrievalService:
@@ -215,6 +217,23 @@ async def chat(
     )
 
     response.latency_ms = int(time.time() * 1000) - start_ms
+
+    # 5b. Grounding check — verify the composed answer's claims are supported
+    # by the retrieved evidence. Runs AFTER composition (on the real answer,
+    # not the citation placeholder) and surfaces a SafetyFlag if not.
+    grounding_report = _grounding_service.check(
+        answer_text=response.answer,
+        chunks=ranked_chunks,
+    )
+    grounding_flag = grounding_report.to_safety_flag()
+    if grounding_flag is not None:
+        response.safety_flags.append(grounding_flag)
+        flags.append(grounding_flag)
+        logger.warning(
+            "Grounding: request_id=%s flagged %d unsupported claim(s)",
+            request_id,
+            len(grounding_report.ungrounded_claims),
+        )
 
     # 6. Audit log
     _audit_log(
