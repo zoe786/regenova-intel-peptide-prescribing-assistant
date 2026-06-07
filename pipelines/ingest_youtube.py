@@ -146,11 +146,26 @@ class YouTubeIngestor:
             return []
 
     def _fetch_transcript(self, video_id: str) -> str | None:
-        """Fetch transcript text for a YouTube video ID."""
+        """Fetch transcript text for a YouTube video ID.
+
+        Supports both the legacy static API (``get_transcript``, pre-1.0) and
+        the current instance API (``YouTubeTranscriptApi().fetch(...)``, 1.0+).
+        """
         try:
             from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore[import]
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-            return " ".join(entry["text"] for entry in transcript_list)
+        except ImportError as exc:
+            logger.error("youtube_transcript_api not installed: %s", exc)
+            return None
+
+        try:
+            if hasattr(YouTubeTranscriptApi, "get_transcript"):
+                # Legacy (<1.0) static API.
+                raw = YouTubeTranscriptApi.get_transcript(video_id)
+            else:
+                # Current (>=1.0) instance API; .fetch() returns a
+                # FetchedTranscript, normalised back to list-of-dicts.
+                raw = YouTubeTranscriptApi().fetch(video_id).to_raw_data()
+            return " ".join(entry["text"] for entry in raw)
         except Exception as exc:
             logger.error("Failed to fetch transcript for %s: %s", video_id, exc)
             return None
@@ -167,9 +182,13 @@ class YouTubeIngestor:
             logger.info("YouTubeIngestor: found %d video IDs", len(video_ids))
 
         docs: list[RawDocument] = []
+        self._last_skipped = 0
+        self._last_video_count = len(video_ids)
         for vid_id in video_ids:
             transcript = self._fetch_transcript(vid_id)
             if not transcript:
+                self._last_skipped += 1
+                logger.warning("No transcript for video %s — skipping", vid_id)
                 continue
             url = f"{YOUTUBE_BASE_URL}{vid_id}"
             prov = dict(self._discovery_provenance.get(vid_id, {}))
@@ -252,10 +271,37 @@ class YouTubeIngestor:
         """
         start = time.time()
         video_ids = self.discover_channel_videos(channel_name, topic=topic)
+        if not video_ids:
+            result = IngestionResult(source_type=SOURCE_TYPE)
+            result.errors.append(
+                f"Channel discovery returned no videos for '{channel_name}' "
+                "(resolution failed, channel empty, or discovery crashed — "
+                "check worker logs)."
+            )
+            result.duration_seconds = time.time() - start
+            logger.warning("%s (autonomous channel=%s)", result, channel_name)
+            return result
+
         docs = self.load_raw(video_ids=video_ids)
         result = self.process(docs)
+        result.skipped = getattr(self, "_last_skipped", 0)
+
+        # A run that discovered videos but ingested zero chunks is a failure,
+        # not a clean completion — surface it instead of reporting success.
+        discovered = getattr(self, "_last_video_count", len(video_ids))
+        if result.count == 0:
+            result.errors.append(
+                f"Discovered {discovered} video(s) but ingested 0 chunks: "
+                f"{result.skipped} skipped (no transcript available or "
+                "transcript fetch failed for every video — check worker logs "
+                "for per-video errors)."
+            )
+
         result.duration_seconds = time.time() - start
-        logger.info("%s (autonomous channel=%s)", result, channel_name)
+        logger.info(
+            "%s (autonomous channel=%s, discovered=%d, skipped=%d)",
+            result, channel_name, discovered, result.skipped,
+        )
         return result
 
 
