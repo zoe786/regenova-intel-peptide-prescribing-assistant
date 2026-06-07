@@ -164,7 +164,20 @@ class YouTubeIngestor:
             else:
                 # Current (>=1.0) instance API; .fetch() returns a
                 # FetchedTranscript, normalised back to list-of-dicts.
-                raw = YouTubeTranscriptApi().fetch(video_id).to_raw_data()
+                # Optionally route through a proxy (e.g. to bypass YouTube's
+                # datacenter-IP block) when YT_TRANSCRIPT_PROXY is set.
+                import os
+                proxy_url = os.environ.get("YT_TRANSCRIPT_PROXY", "").strip()
+                if proxy_url:
+                    from youtube_transcript_api.proxies import GenericProxyConfig
+                    api = YouTubeTranscriptApi(
+                        proxy_config=GenericProxyConfig(
+                            http_url=proxy_url, https_url=proxy_url
+                        )
+                    )
+                else:
+                    api = YouTubeTranscriptApi()
+                raw = api.fetch(video_id).to_raw_data()
             return " ".join(entry["text"] for entry in raw)
         except Exception as exc:
             logger.error("Failed to fetch transcript for %s: %s", video_id, exc)
