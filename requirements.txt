@@ -24,7 +24,7 @@ networkx>=3.3
 biopython>=1.83
 
 # Scraping / ingestion
-youtube-transcript-api>=0.6.2
+youtube-transcript-api>=1.2.4,<2.0
 google-api-python-client>=2.100.0
 beautifulsoup4>=4.12.3
 # Optional: headless browser for JS-rendered site crawling.
