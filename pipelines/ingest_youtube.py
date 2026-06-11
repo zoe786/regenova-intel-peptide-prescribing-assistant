@@ -52,6 +52,17 @@ class YouTubeIngestor:
         self.llm = llm_assistant
         # video_id -> {channel_name, channel_id, video_title, ...}
         self._discovery_provenance: dict[str, dict[str, str]] = {}
+        # Inter-request throttling for transcript fetches. Bursting a whole
+        # channel's worth of requests is what triggers YouTube's IP block, so
+        # we sleep a randomised interval *between* fetches (not after the last
+        # one). Tunable via env without code changes; 0 disables throttling.
+        import os
+        self._throttle_base_s = float(
+            os.environ.get("YT_FETCH_DELAY_SECONDS", "2.0")
+        )
+        self._throttle_jitter_s = float(
+            os.environ.get("YT_FETCH_JITTER_SECONDS", "1.5")
+        )
 
     # ── Autonomous discovery via YouTube Data API ─────────────────────────
 
@@ -145,6 +156,22 @@ class YouTubeIngestor:
             logger.error("Channel discovery failed for '%s': %s", channel_name, exc)
             return []
 
+    def _throttle_sleep(self, extra: float = 0.0) -> None:
+        """Sleep a randomised interval to avoid bursting requests.
+
+        Total delay = base + uniform(0, jitter) + extra(backoff). Randomised
+        jitter desynchronises the request pattern so it looks less automated;
+        ``extra`` carries exponential backoff accumulated from prior failures.
+        Set YT_FETCH_DELAY_SECONDS=0 (and jitter=0) to disable.
+        """
+        import random
+
+        delay = self._throttle_base_s + random.uniform(0, self._throttle_jitter_s)
+        delay += max(extra, 0.0)
+        if delay > 0:
+            logger.debug("Throttling transcript fetch: sleeping %.2fs", delay)
+            time.sleep(delay)
+
     def _fetch_transcript(self, video_id: str) -> str | None:
         """Fetch transcript text for a YouTube video ID.
 
@@ -164,17 +191,46 @@ class YouTubeIngestor:
             else:
                 # Current (>=1.0) instance API; .fetch() returns a
                 # FetchedTranscript, normalised back to list-of-dicts.
-                # Optionally route through a proxy (e.g. to bypass YouTube's
-                # datacenter-IP block) when YT_TRANSCRIPT_PROXY is set.
+                # Optionally route through a proxy to bypass YouTube's
+                # datacenter-IP block. Two mechanisms, in priority order:
+                #   1. Webshare rotating residential proxies, configured via
+                #      WEBSHARE_PROXY_USERNAME / WEBSHARE_PROXY_PASSWORD. This
+                #      is the production-grade path: the library rotates IPs
+                #      and retries on block automatically.
+                #   2. A single generic proxy URL via YT_TRANSCRIPT_PROXY
+                #      (the legacy SSH-tunnel demo workaround).
                 import os
-                proxy_url = os.environ.get("YT_TRANSCRIPT_PROXY", "").strip()
-                if proxy_url:
-                    from youtube_transcript_api.proxies import GenericProxyConfig
-                    api = YouTubeTranscriptApi(
-                        proxy_config=GenericProxyConfig(
+                proxy_config = None
+                ws_user = os.environ.get("WEBSHARE_PROXY_USERNAME", "").strip()
+                ws_pass = os.environ.get("WEBSHARE_PROXY_PASSWORD", "").strip()
+                if ws_user and ws_pass:
+                    from youtube_transcript_api.proxies import WebshareProxyConfig
+                    # Optional comma-separated ISO country codes (e.g. "us,gb")
+                    # to constrain the residential IP pool.
+                    locations_raw = os.environ.get(
+                        "WEBSHARE_PROXY_LOCATIONS", ""
+                    ).strip()
+                    filter_locations = (
+                        [c.strip().lower() for c in locations_raw.split(",") if c.strip()]
+                        or None
+                    )
+                    retries = int(os.environ.get("WEBSHARE_PROXY_RETRIES", "10"))
+                    proxy_config = WebshareProxyConfig(
+                        proxy_username=ws_user,
+                        proxy_password=ws_pass,
+                        filter_ip_locations=filter_locations,
+                        retries_when_blocked=retries,
+                    )
+                else:
+                    proxy_url = os.environ.get("YT_TRANSCRIPT_PROXY", "").strip()
+                    if proxy_url:
+                        from youtube_transcript_api.proxies import GenericProxyConfig
+                        proxy_config = GenericProxyConfig(
                             http_url=proxy_url, https_url=proxy_url
                         )
-                    )
+
+                if proxy_config is not None:
+                    api = YouTubeTranscriptApi(proxy_config=proxy_config)
                 else:
                     api = YouTubeTranscriptApi()
                 raw = api.fetch(video_id).to_raw_data()
@@ -197,12 +253,26 @@ class YouTubeIngestor:
         docs: list[RawDocument] = []
         self._last_skipped = 0
         self._last_video_count = len(video_ids)
-        for vid_id in video_ids:
+        backoff_s = 0.0  # grows on consecutive failures, resets on success
+        for idx, vid_id in enumerate(video_ids):
+            # Throttle between requests to avoid the burst pattern that trips
+            # YouTube's rate limiter. Skip the wait before the first video so
+            # single-video ingests aren't penalised.
+            if idx > 0:
+                self._throttle_sleep(extra=backoff_s)
+
             transcript = self._fetch_transcript(vid_id)
             if not transcript:
                 self._last_skipped += 1
-                logger.warning("No transcript for video %s — skipping", vid_id)
+                # A failure is the strongest signal we're being throttled, so
+                # back off exponentially (capped) before the next attempt.
+                backoff_s = min((backoff_s * 2) or 5.0, 60.0)
+                logger.warning(
+                    "No transcript for video %s — skipping (backoff now %.1fs)",
+                    vid_id, backoff_s,
+                )
                 continue
+            backoff_s = 0.0  # recovered; drop back to base throttle
             url = f"{YOUTUBE_BASE_URL}{vid_id}"
             prov = dict(self._discovery_provenance.get(vid_id, {}))
             # Human-readable name for citations; falls back to the ID.
