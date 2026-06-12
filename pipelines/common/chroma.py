@@ -46,12 +46,27 @@ class LocalDeterministicEmbeddingFunction:
 
 
 def _get_openai_api_key() -> str:
-    """Return OpenAI API key from supported environment variables."""
-    return os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or ""
+    """Return a *dedicated* OpenAI embeddings key, if one is explicitly set.
+
+    Deliberately does NOT fall back to LLM_API_KEY. The LLM key (e.g. a
+    DeepSeek key used for chat/OCR) lives in a different provider and a
+    different concern; treating its mere presence as "use OpenAI embeddings"
+    routes DeepSeek credentials at api.openai.com and 401s. OpenAI embeddings
+    are opt-in via an explicit OPENAI_API_KEY only.
+    """
+    return os.getenv("OPENAI_API_KEY") or ""
 
 
 def get_embedding_function() -> Any:
-    """Return a deterministic Chroma embedding function for this repo."""
+    """Return the Chroma embedding function for this repo.
+
+    Defaults to the offline LocalDeterministicEmbeddingFunction so that
+    ingestion shares an embedding space with the grounding service (which
+    also uses it). OpenAI embeddings are used only when an explicit,
+    dedicated OPENAI_API_KEY is set — and note that switching backends
+    changes vector dimensionality (local=128, text-embedding-3-small=1536),
+    which is incompatible with an existing collection built on the other.
+    """
     api_key = _get_openai_api_key()
     if api_key:
         from chromadb.utils import embedding_functions  # type: ignore[import]

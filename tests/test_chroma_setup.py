@@ -93,6 +93,25 @@ def test_get_collection_falls_back_when_embedding_conflicts(monkeypatch):
     assert call["fallback"]["name"] == chroma.CHROMA_COLLECTION_NAME
 
 
+def test_llm_api_key_alone_does_not_trigger_openai_embeddings(monkeypatch):
+    """Regression: a DeepSeek LLM key must not be routed to OpenAI embeddings.
+
+    LLM_API_KEY is set (e.g. DeepSeek for chat/OCR) but no OPENAI_API_KEY.
+    Embeddings must fall back to local-deterministic, NOT instantiate the
+    OpenAI embedding function with the LLM key (which 401s at api.openai.com).
+    """
+    client_holder = _install_fake_chromadb(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_API_KEY", "sk-deepseek-not-an-openai-key")
+
+    chroma.get_collection("./data/chroma_db")
+
+    call = client_holder["client"].calls[0]
+    assert isinstance(
+        call["embedding_function"], chroma.LocalDeterministicEmbeddingFunction
+    )
+
+
 def test_local_embedding_supports_query_and_documents_interfaces():
     embedding_fn = chroma.LocalDeterministicEmbeddingFunction(dimensions=16)
     doc_embeddings = embedding_fn.embed_documents(["BPC-157 tendon healing"])
