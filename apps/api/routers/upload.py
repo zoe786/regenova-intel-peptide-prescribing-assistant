@@ -279,20 +279,44 @@ async def upload_url(
     list_path = Path(settings.raw_data_dir) / subdir / list_filename
     list_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # For YouTube, normalise the supplied reference (full URL, short link,
+    # shorts/live/embed path, or bare ID) down to a bare 11-char video ID
+    # before storing. The ingestor also normalises at read time, but doing it
+    # here gives the caller an immediate, clean 400 on a malformed reference
+    # instead of a silent skip later, and keeps video_ids.txt canonical.
+    stored_value = body.url.strip()
+    if body.source_type == "youtube":
+        from pipelines.ingest_youtube import extract_video_id
+
+        vid = extract_video_id(stored_value)
+        if vid is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Could not extract a valid YouTube video ID",
+                    "url": body.url,
+                },
+            )
+        stored_value = vid
+
     # Append URL (avoid duplicates)
     existing: set[str] = set()
     if list_path.exists():
-        existing = {ln.strip() for ln in list_path.read_text().splitlines() if ln.strip()}
+        existing = {
+            ln.split("#", 1)[0].strip()
+            for ln in list_path.read_text().splitlines()
+            if ln.split("#", 1)[0].strip()
+        }
 
-    if body.url in existing:
+    if stored_value in existing:
         raise HTTPException(
             status_code=409,
-            detail={"message": "URL already registered", "url": body.url},
+            detail={"message": "URL already registered", "url": stored_value},
         )
 
     with list_path.open("a", encoding="utf-8") as fh:
         label_comment = f"  # {body.label}" if body.label else ""
-        fh.write(f"\n{body.url}{label_comment}")
+        fh.write(f"\n{stored_value}{label_comment}")
 
     job_id = audit_store.log_ingest_job(source_type=body.source_type)
 

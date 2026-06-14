@@ -7,10 +7,12 @@ fetches transcripts via youtube_transcript_api, and chunks them.
 from __future__ import annotations
 
 import logging
+import re
 import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from pipelines.common.chunking import chunk_by_tokens
 from pipelines.common.cleaners import normalize_whitespace
@@ -23,6 +25,94 @@ logger = logging.getLogger(__name__)
 DEFAULT_EVIDENCE_TIER = 3
 SOURCE_TYPE = "youtube"
 YOUTUBE_BASE_URL = "https://www.youtube.com/watch?v="
+
+# YouTube video IDs are exactly 11 chars: [A-Za-z0-9_-].
+_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+# Host suffixes we recognise as YouTube. Compared against the parsed netloc
+# with any leading "www." removed.
+_YOUTUBE_HOSTS = {"youtube.com", "m.youtube.com", "youtu.be", "youtube-nocookie.com"}
+
+
+def extract_video_id(value: str) -> str | None:
+    """Normalise a user-supplied YouTube reference to a bare 11-char video ID.
+
+    Accepts, and returns the ID from, any of:
+      - a bare ID:                       ``dQw4w9WgXcQ``
+      - watch URLs:                      ``https://www.youtube.com/watch?v=ID``
+      - short links:                     ``https://youtu.be/ID``
+      - shorts / live / embed / v paths: ``.../shorts/ID``, ``.../live/ID``,
+                                         ``.../embed/ID``, ``.../v/ID``
+    Query strings and fragments (``?t=30s``, ``&list=...``, ``#...``) are ignored.
+
+    Returns the normalised ID, or ``None`` if no valid 11-char ID can be
+    recovered — callers decide whether that's a skip (ingestor) or a 400
+    (API). Never raises on malformed input.
+    """
+    if not value:
+        return None
+    value = value.strip()
+
+    # Bare ID fast-path.
+    if _VIDEO_ID_RE.match(value):
+        return value
+
+    # Tolerate scheme-less URLs like "youtu.be/ID" so urlparse populates netloc.
+    parse_target = value
+    if "://" not in value and ("youtube" in value or "youtu.be" in value):
+        parse_target = "https://" + value
+
+    parsed = urlparse(parse_target)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+
+    candidate: str | None = None
+    if host in _YOUTUBE_HOSTS:
+        if host == "youtu.be":
+            # Path is /<id>
+            candidate = parsed.path.lstrip("/").split("/", 1)[0]
+        else:
+            qs = parse_qs(parsed.query)
+            if "v" in qs and qs["v"]:
+                candidate = qs["v"][0]
+            else:
+                # /shorts/<id>, /live/<id>, /embed/<id>, /v/<id>
+                parts = [p for p in parsed.path.split("/") if p]
+                if len(parts) >= 2 and parts[0] in {"shorts", "live", "embed", "v"}:
+                    candidate = parts[1]
+
+    if candidate and _VIDEO_ID_RE.match(candidate):
+        return candidate
+    return None
+
+
+def parse_video_ids_file(text: str) -> list[str]:
+    """Parse the contents of ``video_ids.txt`` into normalised video IDs.
+
+    Robust to two things the writer (apps.api.routers.upload) can produce that
+    older parsing got wrong:
+      1. Full URLs instead of bare IDs.
+      2. Trailing ``  # label`` comments appended to otherwise-valid lines —
+         previously only whole-line comments (lines starting with ``#``) were
+         skipped, so a trailing label silently corrupted the ID.
+
+    Lines that yield no valid ID are dropped (and logged by the caller via the
+    returned-vs-input count). Order is preserved; duplicates are de-duped while
+    preserving first-seen order.
+    """
+    seen: set[str] = set()
+    ids: list[str] = []
+    for raw_line in text.splitlines():
+        # Strip trailing inline comments, then whitespace.
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        vid = extract_video_id(line)
+        if vid and vid not in seen:
+            seen.add(vid)
+            ids.append(vid)
+    return ids
+
 
 
 class YouTubeIngestor:
@@ -307,10 +397,7 @@ class YouTubeIngestor:
             if not self.ids_file.exists():
                 logger.warning("Video IDs file not found: %s", self.ids_file)
                 return []
-            video_ids = [
-                line.strip() for line in self.ids_file.read_text().splitlines()
-                if line.strip() and not line.startswith("#")
-            ]
+            video_ids = parse_video_ids_file(self.ids_file.read_text())
             logger.info("YouTubeIngestor: found %d video IDs", len(video_ids))
 
         docs: list[RawDocument] = []
