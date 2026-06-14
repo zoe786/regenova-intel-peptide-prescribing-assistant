@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
@@ -29,7 +30,7 @@ class YouTubeIngestor:
 
     Supports two modes:
     - File mode (default): read video IDs from video_ids.txt.
-    - Autonomous mode: given a channel name, enumerate every uploaded video
+    - Autonomous mode: given a channel name or URL, enumerate every uploaded video
       via the YouTube Data API, capture channel + title provenance, optionally
       triage relevance with the LLM, then fetch transcripts and ingest.
     """
@@ -64,17 +65,73 @@ class YouTubeIngestor:
             os.environ.get("YT_FETCH_JITTER_SECONDS", "1.5")
         )
 
+    # ── URL Parsing ────────────────────────────────────────────────────────
+
+    def _parse_channel_url(self, url_or_name: str) -> str | None:
+        """Extract channel identifier from YouTube URL or return name as-is.
+
+        Supports:
+          https://www.youtube.com/@DrAFroese         → "DrAFroese"
+          https://www.youtube.com/channel/UCxxxxxx   → "UCxxxxxx"
+          https://www.youtube.com/c/ChannelName      → "ChannelName"
+          DrAFroese (display name)                   → "DrAFroese"
+
+        Args:
+            url_or_name: YouTube URL or channel display name.
+
+        Returns:
+            Channel identifier to pass to YouTube API, or None if invalid.
+        """
+        url_or_name = url_or_name.strip()
+        
+        # If it doesn't look like a URL, treat as display name
+        if not url_or_name.startswith("http"):
+            return url_or_name
+        
+        try:
+            parsed = urllib.parse.urlparse(url_or_name)
+        except Exception as e:
+            logger.warning("Failed to parse URL: %s", e)
+            return None
+        
+        if "youtube.com" not in parsed.netloc and "youtu.be" not in parsed.netloc:
+            logger.warning("Not a YouTube URL: %s", url_or_name)
+            return None
+        
+        path_parts = parsed.path.strip("/").split("/")
+        
+        if not path_parts or not path_parts[0]:
+            logger.warning("Could not extract channel identifier from URL: %s", url_or_name)
+            return None
+        
+        identifier = path_parts[0]
+        
+        # Handle vanity URLs: @ChannelName
+        if identifier.startswith("@"):
+            return identifier[1:]  # Remove the @ symbol
+        
+        # Handle /channel/ID format: channel/UCxxxxxx
+        if identifier == "channel" and len(path_parts) > 1:
+            return path_parts[1]  # "UCxxxxxx"
+        
+        # Handle /c/Name format: c/ChannelName
+        if identifier == "c" and len(path_parts) > 1:
+            return path_parts[1]  # "ChannelName"
+        
+        # If nothing matched, return the identifier as-is (treat as name)
+        return identifier
+
     # ── Autonomous discovery via YouTube Data API ─────────────────────────
 
-    def discover_channel_videos(self, channel_name: str, topic: str = "") -> list[str]:
-        """Enumerate every uploaded video for a channel name.
+    def discover_channel_videos(self, channel_name_or_url: str, topic: str = "") -> list[str]:
+        """Enumerate every uploaded video for a channel name or URL.
 
-        Resolves the channel name to its uploads playlist, paginates all
+        Resolves the channel name/URL to its uploads playlist, paginates all
         items, captures channel/title provenance, and (when an LLM is
         available and a topic is given) drops clearly off-topic videos.
 
         Args:
-            channel_name: Channel display name to resolve.
+            channel_name_or_url: Channel display name, URL, or channel ID.
             topic: Optional topic for relevance triage (e.g. "peptides").
 
         Returns:
@@ -89,16 +146,22 @@ class YouTubeIngestor:
             logger.error("google-api-python-client not installed — channel discovery unavailable")
             return []
 
+        # Parse URL to extract channel identifier
+        channel_identifier = self._parse_channel_url(channel_name_or_url)
+        if not channel_identifier:
+            logger.error("Could not parse channel from: %s", channel_name_or_url)
+            return []
+
         try:
             youtube = build("youtube", "v3", developerKey=self.youtube_api_key)
 
-            # 1. Resolve channel name → channel id + uploads playlist.
+            # 1. Resolve channel name/ID → channel id + uploads playlist.
             search = youtube.search().list(
-                q=channel_name, type="channel", part="snippet", maxResults=1
+                q=channel_identifier, type="channel", part="snippet", maxResults=1
             ).execute()
             items = search.get("items", [])
             if not items:
-                logger.warning("No channel found for '%s'", channel_name)
+                logger.warning("No channel found for '%s'", channel_identifier)
                 return []
             channel_id = items[0]["snippet"]["channelId"]
             resolved_name = items[0]["snippet"]["title"]
@@ -153,7 +216,7 @@ class YouTubeIngestor:
             )
             return video_ids
         except Exception as exc:
-            logger.error("Channel discovery failed for '%s': %s", channel_name, exc)
+            logger.error("Channel discovery failed for '%s': %s", channel_identifier, exc)
             return []
 
     def _throttle_sleep(self, extra: float = 0.0) -> None:
@@ -342,27 +405,27 @@ class YouTubeIngestor:
         logger.info("%s", result)
         return result
 
-    def run_autonomous(self, channel_name: str, topic: str = "") -> IngestionResult:
+    def run_autonomous(self, channel_name_or_url: str, topic: str = "") -> IngestionResult:
         """Discover and ingest every video from a channel.
 
         Args:
-            channel_name: Channel display name (as pasted by the user).
+            channel_name_or_url: Channel display name, URL, or channel ID.
             topic: Optional topic for relevance triage.
 
         Returns:
             IngestionResult summarising the run.
         """
         start = time.time()
-        video_ids = self.discover_channel_videos(channel_name, topic=topic)
+        video_ids = self.discover_channel_videos(channel_name_or_url, topic=topic)
         if not video_ids:
             result = IngestionResult(source_type=SOURCE_TYPE)
             result.errors.append(
-                f"Channel discovery returned no videos for '{channel_name}' "
+                f"Channel discovery returned no videos for '{channel_name_or_url}' "
                 "(resolution failed, channel empty, or discovery crashed — "
                 "check worker logs)."
             )
             result.duration_seconds = time.time() - start
-            logger.warning("%s (autonomous channel=%s)", result, channel_name)
+            logger.warning("%s (autonomous channel=%s)", result, channel_name_or_url)
             return result
 
         docs = self.load_raw(video_ids=video_ids)
@@ -383,7 +446,7 @@ class YouTubeIngestor:
         result.duration_seconds = time.time() - start
         logger.info(
             "%s (autonomous channel=%s, discovered=%d, skipped=%d)",
-            result, channel_name, discovered, result.skipped,
+            result, channel_name_or_url, discovered, result.skipped,
         )
         return result
 
