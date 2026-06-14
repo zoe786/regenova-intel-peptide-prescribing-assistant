@@ -53,7 +53,7 @@ class PubMedAutonomousRequest(BaseModel):
 
 
 class YouTubeAutonomousRequest(BaseModel):
-    channel_name: str = Field(..., min_length=2, description="Channel display name to scrape")
+    channel_name: str = Field(..., min_length=2, description="Channel display name or URL (e.g., 'Dr. A. Froese' or 'https://www.youtube.com/@DrAFroese')")
     topic: str = Field(default="", description="Optional topic for relevance triage")
 
 
