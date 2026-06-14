@@ -1,5 +1,5 @@
 # ── Profile notes ──────────────────────────────────────────────────────────────
-# Default profile starts: api, chromadb, admin, clinician
+# Default profile starts: api, worker, redis, admin, clinician
 # To include Neo4j:  docker compose --profile neo4j up -d
 
 services:
@@ -18,24 +18,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
-  chromadb:
-    image: chromadb/chroma:latest
-    container_name: regenova_chromadb
-    ports:
-      - "127.0.0.1:8001:8000"   # Bind to loopback — not exposed publicly
-    volumes:
-      - ./data/chroma_db:/chroma/chroma
-    environment:
-      - IS_PERSISTENT=TRUE
-      - PERSIST_DIRECTORY=/chroma/chroma
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "echo > /dev/tcp/127.0.0.1/8000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
 
   neo4j:
     profiles: [neo4j]        # Only starts with: docker compose --profile neo4j up
@@ -71,15 +53,12 @@ services:
     env_file:
       - .env
     environment:
-      - CHROMA_PERSIST_DIR=/chroma/chroma
+      - CHROMA_PERSIST_DIR=/app/data/chroma_db
       - VECTOR_DB_BACKEND=chroma
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./data:/app/data
       - ./apps/frontend:/app/apps/frontend:ro
-    depends_on:
-      chromadb:
-        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -149,7 +128,7 @@ services:
     env_file:
       - .env
     environment:
-      - CHROMA_PERSIST_DIR=/chroma/chroma
+      - CHROMA_PERSIST_DIR=/app/data/chroma_db
       - VECTOR_DB_BACKEND=chroma
       - REDIS_URL=redis://redis:6379/0
     volumes:
@@ -160,8 +139,6 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       redis:
-        condition: service_healthy
-      chromadb:
         condition: service_healthy
     restart: unless-stopped
 
