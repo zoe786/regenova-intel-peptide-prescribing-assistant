@@ -325,72 +325,162 @@ class YouTubeIngestor:
             logger.debug("Throttling transcript fetch: sleeping %.2fs", delay)
             time.sleep(delay)
 
-    def _fetch_transcript(self, video_id: str) -> str | None:
-        """Fetch transcript text for a YouTube video ID.
+    def _build_transcript_api(self):
+        """Construct a YouTubeTranscriptApi with a STICKY-IP proxy.
 
-        Supports both the legacy static API (``get_transcript``, pre-1.0) and
-        the current instance API (``YouTubeTranscriptApi().fetch(...)``, 1.0+).
+        Why not WebshareProxyConfig? Its `.url` forces a ``-rotate`` suffix on
+        the proxy username and sets ``prevent_keeping_connections_alive=True``,
+        which gives a *new residential IP on every HTTP request*. A single
+        transcript fetch is three sequential requests:
+
+            GET  /watch?v=…                  (establish)
+            POST /youtubei/v1/player          (mints a signed timedtext URL,
+                                               bound to the requesting IP)
+            GET  /api/timedtext?…&signature=… (the actual caption stream)
+
+        Under per-request rotation those three go out on three *different* IPs,
+        so the timedtext GET presents the player's IP-bound signature from the
+        wrong IP. YouTube then either rejects it (302 → www.google.com/sorry,
+        surfacing as RequestBlocked/IpBlocked) or starts the stream and severs
+        it mid-transfer (ChunkedEncodingError / IncompleteRead). This is the
+        root cause of transcripts failing in bursts while a lone fetch
+        occasionally succeeds by luck of the rotation.
+
+        Fix: build the proxy from the *plain* Webshare username (no ``-rotate``)
+        as a GenericProxyConfig, which holds ONE IP for the lifetime of the
+        TCP connection. All three sub-requests of a fetch then share a single
+        coherent IP. Rotation happens *between* fetches/retries instead, because
+        each call here returns a fresh api → fresh session → fresh connection →
+        fresh sticky IP.
+
+        Priority: Webshare creds → generic YT_TRANSCRIPT_PROXY (SSH-tunnel
+        demo) → no proxy.
         """
+        import os
+        from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore[import]
+
+        ws_user = os.environ.get("WEBSHARE_PROXY_USERNAME", "").strip()
+        ws_pass = os.environ.get("WEBSHARE_PROXY_PASSWORD", "").strip()
+
+        if ws_user and ws_pass:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+            # Strip any user-supplied -rotate; we deliberately want sticky.
+            if ws_user.endswith("-rotate"):
+                ws_user = ws_user[: -len("-rotate")]
+            host = os.environ.get("WEBSHARE_PROXY_HOST", "p.webshare.io").strip()
+            port = os.environ.get("WEBSHARE_PROXY_PORT", "80").strip()
+            ws_url = f"http://{ws_user}:{ws_pass}@{host}:{port}/"
+            cfg = GenericProxyConfig(http_url=ws_url, https_url=ws_url)
+            return YouTubeTranscriptApi(proxy_config=cfg)
+
+        proxy_url = os.environ.get("YT_TRANSCRIPT_PROXY", "").strip()
+        if proxy_url:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+            cfg = GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
+            return YouTubeTranscriptApi(proxy_config=cfg)
+
+        return YouTubeTranscriptApi()
+
+    def _fetch_transcript(self, video_id: str) -> str | None:
+        """Fetch transcript text for a YouTube video ID, with IP rotation.
+
+        Each attempt uses a fresh sticky-IP session (see _build_transcript_api),
+        so a failed attempt is retried on a *different* residential IP. Two
+        failure classes are retried — explicit blocks (RequestBlocked/IpBlocked)
+        and transport tears (ChunkedEncodingError / IncompleteRead / connection
+        resets), both of which are symptoms of a bad/throttled exit IP that a
+        rotation will move us off. Permanent conditions (no transcript, disabled,
+        unavailable, age-restricted) are NOT retried — we bail immediately.
+        """
+        import os
+        import random
+
         try:
-            from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore[import]
+            from youtube_transcript_api import YouTubeTranscriptApi  # noqa: F401
         except ImportError as exc:
             logger.error("youtube_transcript_api not installed: %s", exc)
             return None
 
-        try:
-            if hasattr(YouTubeTranscriptApi, "get_transcript"):
-                # Legacy (<1.0) static API.
-                raw = YouTubeTranscriptApi.get_transcript(video_id)
-            else:
-                # Current (>=1.0) instance API; .fetch() returns a
-                # FetchedTranscript, normalised back to list-of-dicts.
-                # Optionally route through a proxy to bypass YouTube's
-                # datacenter-IP block. Two mechanisms, in priority order:
-                #   1. Webshare rotating residential proxies, configured via
-                #      WEBSHARE_PROXY_USERNAME / WEBSHARE_PROXY_PASSWORD. This
-                #      is the production-grade path: the library rotates IPs
-                #      and retries on block automatically.
-                #   2. A single generic proxy URL via YT_TRANSCRIPT_PROXY
-                #      (the legacy SSH-tunnel demo workaround).
-                import os
-                proxy_config = None
-                ws_user = os.environ.get("WEBSHARE_PROXY_USERNAME", "").strip()
-                ws_pass = os.environ.get("WEBSHARE_PROXY_PASSWORD", "").strip()
-                if ws_user and ws_pass:
-                    from youtube_transcript_api.proxies import WebshareProxyConfig
-                    # Optional comma-separated ISO country codes (e.g. "us,gb")
-                    # to constrain the residential IP pool.
-                    locations_raw = os.environ.get(
-                        "WEBSHARE_PROXY_LOCATIONS", ""
-                    ).strip()
-                    filter_locations = (
-                        [c.strip().lower() for c in locations_raw.split(",") if c.strip()]
-                        or None
-                    )
-                    retries = int(os.environ.get("WEBSHARE_PROXY_RETRIES", "10"))
-                    proxy_config = WebshareProxyConfig(
-                        proxy_username=ws_user,
-                        proxy_password=ws_pass,
-                        filter_ip_locations=filter_locations,
-                        retries_when_blocked=retries,
-                    )
-                else:
-                    proxy_url = os.environ.get("YT_TRANSCRIPT_PROXY", "").strip()
-                    if proxy_url:
-                        from youtube_transcript_api.proxies import GenericProxyConfig
-                        proxy_config = GenericProxyConfig(
-                            http_url=proxy_url, https_url=proxy_url
-                        )
+        # Library-level "give up, this video has no transcript" errors.
+        from youtube_transcript_api._errors import (
+            CouldNotRetrieveTranscript,
+            RequestBlocked,
+            IpBlocked,
+        )
+        # Transport-level errors that indicate a flaky/throttled exit IP.
+        from requests.exceptions import (
+            ChunkedEncodingError,
+            ConnectionError as RequestsConnectionError,
+            ReadTimeout,
+            ProxyError,
+        )
+        from urllib3.exceptions import ProtocolError, IncompleteRead
 
-                if proxy_config is not None:
-                    api = YouTubeTranscriptApi(proxy_config=proxy_config)
-                else:
-                    api = YouTubeTranscriptApi()
+        retryable_transport = (
+            ChunkedEncodingError,
+            RequestsConnectionError,
+            ReadTimeout,
+            ProxyError,
+            ProtocolError,
+            IncompleteRead,
+        )
+        retryable_block = (RequestBlocked, IpBlocked)
+
+        max_attempts = int(os.environ.get("YT_FETCH_MAX_ATTEMPTS", "6"))
+        last_exc: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                api = self._build_transcript_api()
                 raw = api.fetch(video_id).to_raw_data()
-            return " ".join(entry["text"] for entry in raw)
-        except Exception as exc:
-            logger.error("Failed to fetch transcript for %s: %s", video_id, exc)
-            return None
+                if attempt > 1:
+                    logger.info(
+                        "Transcript for %s succeeded on attempt %d/%d",
+                        video_id, attempt, max_attempts,
+                    )
+                return " ".join(entry["text"] for entry in raw)
+
+            except retryable_block as exc:
+                last_exc = exc
+                logger.warning(
+                    "Transcript fetch %s blocked (attempt %d/%d: %s) — "
+                    "rotating to a fresh IP",
+                    video_id, attempt, max_attempts, type(exc).__name__,
+                )
+            except retryable_transport as exc:
+                last_exc = exc
+                logger.warning(
+                    "Transcript fetch %s transport error (attempt %d/%d: %s) — "
+                    "rotating to a fresh IP",
+                    video_id, attempt, max_attempts, type(exc).__name__,
+                )
+            except CouldNotRetrieveTranscript as exc:
+                # NoTranscriptFound, TranscriptsDisabled, VideoUnavailable,
+                # AgeRestricted, etc. Retrying won't help — bail now.
+                logger.info(
+                    "Transcript for %s unavailable (%s) — not retrying",
+                    video_id, type(exc).__name__,
+                )
+                return None
+            except Exception as exc:  # noqa: BLE001 - unknown; retry defensively
+                last_exc = exc
+                logger.warning(
+                    "Transcript fetch %s unexpected error (attempt %d/%d: %s) — "
+                    "rotating to a fresh IP",
+                    video_id, attempt, max_attempts, type(exc).__name__,
+                )
+
+            # Short randomised backoff before the next IP, capped, to avoid a
+            # tight reconnect loop while still moving quickly through bad exits.
+            if attempt < max_attempts:
+                sleep_s = min(2 ** (attempt - 1), 8) + random.uniform(0, 1.0)
+                time.sleep(sleep_s)
+
+        logger.error(
+            "Failed to fetch transcript for %s after %d attempts: %s",
+            video_id, max_attempts, last_exc,
+        )
+        return None
 
     def load_raw(self, video_ids: list[str] | None = None) -> list[RawDocument]:
         if video_ids is None:
