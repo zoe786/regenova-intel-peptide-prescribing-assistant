@@ -162,3 +162,24 @@ async def get_ingest_job(
             detail={"message": f"Ingest job '{job_id}' not found"},
         )
     return job
+
+
+@router.get(
+    "/ingest-jobs/{job_id}/outcomes",
+    summary="Per-video success/failure outcomes for a batched ingest job (admin only)",
+)
+async def get_ingest_job_outcomes(
+    job_id: str,
+    _: None = Depends(_require_admin_key),
+    audit_store: AuditStore = Depends(_get_audit_store),
+) -> dict:
+    """Return per-video outcomes (ingested / skipped / failed) for a job.
+
+    Populated by the batched YouTube ingest path; the list is empty for sources
+    that don't track per-item outcomes.
+    """
+    return {
+        "job_id": job_id,
+        "summary": audit_store.summarize_video_outcomes(job_id),
+        "outcomes": audit_store.get_video_outcomes(job_id),
+    }

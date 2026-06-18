@@ -702,6 +702,39 @@ elif page == "📊 Ingest Jobs":
                     if results:
                         st.subheader("Per-source breakdown")
                         st.json(results)
+                        report_path = results.get("report_path")
+                        if report_path:
+                            st.caption(f"📄 CSV report on the server: `{report_path}`")
+
+                    # Per-video outcomes (populated for batched YouTube ingests).
+                    if st.button("📋 Show per-video outcomes", key=f"outcomes_{jid}"):
+                        oc = api_get(f"/audit/ingest-jobs/{jid}/outcomes")
+                        if "error" in oc:
+                            st.error(f"Could not load outcomes: {oc['error']}")
+                        else:
+                            rows = oc.get("outcomes", [])
+                            if not rows:
+                                st.info("No per-video outcomes recorded for this job.")
+                            else:
+                                summary = oc.get("summary", {})
+                                m = st.columns(4)
+                                m[0].metric("Ingested", summary.get("ingested", 0))
+                                m[1].metric("Skipped", summary.get("skipped", 0))
+                                m[2].metric("Failed", summary.get("failed", 0))
+                                m[3].metric("Chunks", summary.get("chunks", 0))
+                                st.dataframe(
+                                    [
+                                        {
+                                            "batch": r.get("batch_index", 0),
+                                            "video_id": r.get("video_id", ""),
+                                            "status": r.get("status", ""),
+                                            "reason": r.get("reason", ""),
+                                            "chunks": r.get("chunks", 0),
+                                        }
+                                        for r in rows
+                                    ],
+                                    use_container_width=True,
+                                )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

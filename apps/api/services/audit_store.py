@@ -61,6 +61,21 @@ CREATE INDEX IF NOT EXISTS idx_ingest_jobs_status     ON ingest_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_ingest_jobs_triggered  ON ingest_jobs(triggered_at);
 """
 
+_CREATE_VIDEO_OUTCOMES = """
+CREATE TABLE IF NOT EXISTS ingest_video_outcomes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       TEXT    NOT NULL,
+    batch_index  INTEGER NOT NULL DEFAULT 0,
+    video_id     TEXT    NOT NULL,
+    status       TEXT    NOT NULL,
+    reason       TEXT    NOT NULL DEFAULT '',
+    chunks       INTEGER NOT NULL DEFAULT 0,
+    recorded_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_video_outcomes_job    ON ingest_video_outcomes(job_id);
+CREATE INDEX IF NOT EXISTS idx_video_outcomes_status ON ingest_video_outcomes(status);
+"""
+
 _CREATE_PDF_QUARANTINE = """
 CREATE TABLE IF NOT EXISTS pdf_quarantine (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,6 +143,7 @@ class AuditStore:
             try:
                 conn.executescript(_CREATE_AUDIT_EVENTS)
                 conn.executescript(_CREATE_INGEST_JOBS)
+                conn.executescript(_CREATE_VIDEO_OUTCOMES)
                 conn.executescript(_CREATE_PDF_QUARANTINE)
                 conn.commit()
             finally:
@@ -346,6 +362,197 @@ class AuditStore:
                 conn.commit()
             finally:
                 conn.close()
+
+    def fail_orphaned_running_jobs(
+        self,
+        reason: str = (
+            "Marked failed on worker startup: orphaned by a previous worker "
+            "exit, crash, or restart (no live job was resumed)."
+        ),
+    ) -> int:
+        """Move every ingest job still in 'running' to 'failed'.
+
+        Called on worker startup so a restart self-heals stale rows instead of
+        leaving them pinned at 'running' forever (the admin UI reads this table
+        and has no way to clear them otherwise).
+
+        Safe for this single-worker deployment: a freshly started worker never
+        resumes an in-flight job, so any 'running' row at startup is by
+        definition orphaned. If this is ever run with multiple concurrent
+        workers, gate it on job age or a heartbeat instead — otherwise one
+        worker's boot would fail a healthy run still executing on a peer.
+
+        Returns:
+            Number of rows transitioned to 'failed'.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "UPDATE ingest_jobs SET status='failed', completed_at=?, "
+                    "error=? WHERE status='running'",
+                    (self._now(), reason),
+                )
+                conn.commit()
+                return cur.rowcount
+            finally:
+                conn.close()
+
+    def init_ingest_job_batches(
+        self, job_id: str, videos_total: int, batches_total: int
+    ) -> None:
+        """Mark a job 'running' and seed batch-progress in its results JSON."""
+        results = {
+            "mode": "batched",
+            "videos_total": int(videos_total),
+            "batches": {"total": int(batches_total), "done": 0},
+            "counts": {"ingested": 0, "skipped": 0, "failed": 0},
+        }
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "UPDATE ingest_jobs SET status='running', results=? WHERE job_id=?",
+                    (json.dumps(results, default=str), job_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def bump_ingest_job_progress(
+        self,
+        job_id: str,
+        add_chunks: int = 0,
+        batches_done_increment: int = 0,
+        counts: dict | None = None,
+        errors: list[str] | None = None,
+        report_path: str | None = None,
+    ) -> dict:
+        """Atomically fold one batch's results into the parent job row.
+
+        Read-modify-write under the store lock, so concurrent batches can't lose
+        updates (and it stays correct even though this deployment serialises
+        them). Returns {done, total, complete, status}. When the final batch
+        lands, status becomes 'completed' (or 'failed' if nothing was ingested).
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT total_chunks, results, error FROM ingest_jobs WHERE job_id=?",
+                    (job_id,),
+                ).fetchone()
+                if row is None:
+                    return {"done": 0, "total": 0, "complete": False, "status": "unknown"}
+                try:
+                    results = json.loads(row["results"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    results = {}
+                batches = results.setdefault("batches", {"total": 0, "done": 0})
+                batches["done"] = int(batches.get("done", 0)) + int(batches_done_increment)
+                c = results.setdefault("counts", {"ingested": 0, "skipped": 0, "failed": 0})
+                for k, v in (counts or {}).items():
+                    c[k] = int(c.get(k, 0)) + int(v)
+                total_chunks = int(row["total_chunks"] or 0) + int(add_chunks)
+                if report_path:
+                    results["report_path"] = report_path
+
+                existing_err = row["error"] or ""
+                if errors:
+                    joined = "; ".join(e for e in errors if e)
+                    if joined:
+                        existing_err = (
+                            (existing_err + " | " + joined) if existing_err else joined
+                        )[:2000]
+
+                done = int(batches.get("done", 0))
+                total = int(batches.get("total", 0))
+                complete = total > 0 and done >= total
+                status = "running"
+                completed_at = None
+                if complete:
+                    status = "completed" if total_chunks > 0 else "failed"
+                    completed_at = self._now()
+
+                conn.execute(
+                    "UPDATE ingest_jobs SET status=?, completed_at=?, total_chunks=?, "
+                    "results=?, error=? WHERE job_id=?",
+                    (
+                        status,
+                        completed_at,
+                        total_chunks,
+                        json.dumps(results, default=str),
+                        existing_err or None,
+                        job_id,
+                    ),
+                )
+                conn.commit()
+                return {"done": done, "total": total, "complete": complete, "status": status}
+            finally:
+                conn.close()
+
+    def log_video_outcomes(
+        self, job_id: str, batch_index: int, outcomes: list[dict]
+    ) -> int:
+        """Persist per-video {video_id, status, reason, chunks} rows for a job."""
+        if not outcomes:
+            return 0
+        now = self._now()
+        rows = [
+            (
+                job_id,
+                int(batch_index),
+                str(o.get("video_id", "")),
+                str(o.get("status", "")),
+                str(o.get("reason", "") or "")[:500],
+                int(o.get("chunks", 0) or 0),
+                now,
+            )
+            for o in outcomes
+        ]
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.executemany(
+                    "INSERT INTO ingest_video_outcomes "
+                    "(job_id, batch_index, video_id, status, reason, chunks, recorded_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return len(rows)
+
+    def get_video_outcomes(self, job_id: str) -> list[dict]:
+        """Return all per-video outcome rows for a job (batch then insert order)."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT batch_index, video_id, status, reason, chunks, recorded_at "
+                "FROM ingest_video_outcomes WHERE job_id=? ORDER BY batch_index, id",
+                (job_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def summarize_video_outcomes(self, job_id: str) -> dict:
+        """Return {ingested, skipped, failed, chunks} totals for a job."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) n, COALESCE(SUM(chunks),0) c "
+                "FROM ingest_video_outcomes WHERE job_id=? GROUP BY status",
+                (job_id,),
+            ).fetchall()
+            summary = {"ingested": 0, "skipped": 0, "failed": 0, "chunks": 0}
+            for r in rows:
+                summary[r["status"]] = r["n"]
+                summary["chunks"] += int(r["c"])
+            return summary
+        finally:
+            conn.close()
 
     def list_ingest_jobs(
         self,
