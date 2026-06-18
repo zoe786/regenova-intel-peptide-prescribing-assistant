@@ -196,7 +196,7 @@ async def autonomous_youtube(
     )
     dispatch = await enqueue_or_run(
         settings=settings,
-        task_name="ingest_youtube_task",
+        task_name="ingest_youtube_channel_task",
         task_args=(body.channel_name, body.topic, job_id),
         fallback=lambda: _youtube_fallback(
             settings, audit_store, body.channel_name, body.topic, ip, job_id

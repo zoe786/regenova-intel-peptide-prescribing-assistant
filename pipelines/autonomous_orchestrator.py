@@ -39,6 +39,8 @@ class AutonomousRunRecord:
     errors: list[str] = field(default_factory=list)
     duration_seconds: float = 0.0
     llm_decisions: list[dict] = field(default_factory=list)
+    # Per-video {video_id, status, reason, chunks} for batched YouTube runs.
+    outcomes: list[dict] = field(default_factory=list)
 
     def to_audit(self) -> dict:
         return asdict(self)
@@ -152,6 +154,73 @@ class AutonomousIngestionOrchestrator:
             record.errors.append(str(exc))
         record.duration_seconds = round(time.time() - start, 2)
         self._emit(record)
+        return record
+
+    def discover_youtube(
+        self, channel_name: str, topic: str = ""
+    ) -> tuple[list[str], dict]:
+        """Discover a channel's video IDs once, returning (ids, provenance).
+
+        The planner step of the batched ingest path. Provenance (channel/title
+        per video) is returned so it can be handed to each batch — batches run
+        in separate worker invocations and would otherwise lose the metadata
+        that makes citations readable.
+        """
+        from pipelines.ingest_youtube import YouTubeIngestor
+        ingestor = YouTubeIngestor(
+            chroma_persist_dir=getattr(self.settings, "chroma_persist_dir", "./data/chroma_db"),
+            youtube_api_key=getattr(self.settings, "youtube_api_key", ""),
+            llm_assistant=self._build_llm_assistant(),
+        )
+        ids = ingestor.discover_channel_videos(channel_name, topic=topic)
+        prov = dict(getattr(ingestor, "_discovery_provenance", {}) or {})
+        return ids, prov
+
+    def ingest_youtube_batch(
+        self, channel_name: str, topic: str, batch_videos: list[dict]
+    ) -> AutonomousRunRecord:
+        """Ingest one batch of videos (no discovery), recording per-video outcomes.
+
+        ``batch_videos`` is a list of ``{"id": video_id, "prov": {...}}`` produced
+        by the planner. Provenance is restored onto the ingestor so source
+        names/titles match a monolithic run. The returned record's ``outcomes``
+        carries each video's status/reason/chunks for the caller to persist.
+        """
+        record = AutonomousRunRecord(
+            source="youtube",
+            trigger={
+                "channel_name": channel_name,
+                "topic": topic,
+                "batch_size": len(batch_videos),
+            },
+        )
+        start = time.time()
+        try:
+            from pipelines.ingest_youtube import YouTubeIngestor, YOUTUBE_BASE_URL
+            ingestor = YouTubeIngestor(
+                chroma_persist_dir=getattr(self.settings, "chroma_persist_dir", "./data/chroma_db"),
+                youtube_api_key=getattr(self.settings, "youtube_api_key", ""),
+                llm_assistant=self._build_llm_assistant(),
+            )
+            ids = [v["id"] for v in batch_videos]
+            ingestor._discovery_provenance = {
+                v["id"]: dict(v.get("prov") or {}) for v in batch_videos
+            }
+            result = ingestor.run_batch(ids, topic=topic)
+            record.chunks_ingested = result.count
+            record.errors = list(result.errors)
+            # Annotate each fetch outcome with the chunks it produced.
+            outcomes = []
+            for o in getattr(ingestor, "_last_outcomes", []):
+                url = f"{YOUTUBE_BASE_URL}{o['video_id']}"
+                outcomes.append({**o, "chunks": int(result.per_source.get(url, 0))})
+            record.outcomes = outcomes
+            record.status = "completed" if result.success else "failed"
+        except Exception as exc:  # noqa: BLE001
+            logger.error("YouTube batch ingest failed: %s", exc)
+            record.status = "failed"
+            record.errors.append(str(exc))
+        record.duration_seconds = round(time.time() - start, 2)
         return record
 
     # ── Website (full-site crawl) ─────────────────────────────────────────

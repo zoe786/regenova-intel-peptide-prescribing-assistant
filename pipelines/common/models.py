@@ -92,6 +92,9 @@ class IngestionResult:
     quarantined_documents: list[dict] = field(default_factory=list)
     duration_seconds: float = 0.0
     skipped: int = 0
+    # Chunks written per source_url, so callers can attribute counts to the
+    # specific document/video that produced them (used by per-video reports).
+    per_source: dict = field(default_factory=dict)
 
     @property
     def success(self) -> bool:

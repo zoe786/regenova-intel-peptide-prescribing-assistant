@@ -115,6 +115,33 @@ def parse_video_ids_file(text: str) -> list[str]:
 
 
 
+def _make_timeout_session(timeout):
+    """Build a ``requests.Session`` that applies a default timeout per request.
+
+    ``requests`` has no session-level timeout, and ``youtube_transcript_api``
+    never sets one — so a proxy connection that opens but then stalls (YouTube
+    accepts the TCP/TLS handshake but never returns caption bytes) blocks the
+    calling thread *forever*. Because transcript fetches run inside an
+    uncancellable worker thread, one such stall is enough to keep a job alive
+    past arq's ``job_timeout`` indefinitely.
+
+    Injecting a default ``(connect, read)`` timeout turns that stall into a
+    ``requests.exceptions.ReadTimeout`` / ``ConnectTimeout`` — which
+    ``_fetch_transcript`` already classifies as a retryable transport error and
+    rotates off. ``requests`` is imported lazily here so unit tests that never
+    touch the network stay import-light.
+    """
+    import requests
+
+    class _Session(requests.Session):
+        def request(self, *args, **kwargs):  # type: ignore[override]
+            if kwargs.get("timeout") is None:
+                kwargs["timeout"] = timeout
+            return super().request(*args, **kwargs)
+
+    return _Session()
+
+
 class YouTubeIngestor:
     """Ingestor for YouTube video transcripts.
 
@@ -154,6 +181,11 @@ class YouTubeIngestor:
         self._throttle_jitter_s = float(
             os.environ.get("YT_FETCH_JITTER_SECONDS", "1.5")
         )
+        # Per-request HTTP timeout for transcript fetches. Without this a
+        # stalled proxy connection hangs the worker thread forever (see
+        # _make_timeout_session). Connect is kept short; read carries the bulk.
+        _read_t = float(os.environ.get("YT_FETCH_TIMEOUT_SECONDS", "30"))
+        self._fetch_timeout = (min(10.0, _read_t), _read_t)
 
     # ── URL Parsing ────────────────────────────────────────────────────────
 
@@ -371,15 +403,23 @@ class YouTubeIngestor:
             port = os.environ.get("WEBSHARE_PROXY_PORT", "80").strip()
             ws_url = f"http://{ws_user}:{ws_pass}@{host}:{port}/"
             cfg = GenericProxyConfig(http_url=ws_url, https_url=ws_url)
-            return YouTubeTranscriptApi(proxy_config=cfg)
+            return YouTubeTranscriptApi(
+                proxy_config=cfg,
+                http_client=_make_timeout_session(self._fetch_timeout),
+            )
 
         proxy_url = os.environ.get("YT_TRANSCRIPT_PROXY", "").strip()
         if proxy_url:
             from youtube_transcript_api.proxies import GenericProxyConfig
             cfg = GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
-            return YouTubeTranscriptApi(proxy_config=cfg)
+            return YouTubeTranscriptApi(
+                proxy_config=cfg,
+                http_client=_make_timeout_session(self._fetch_timeout),
+            )
 
-        return YouTubeTranscriptApi()
+        return YouTubeTranscriptApi(
+            http_client=_make_timeout_session(self._fetch_timeout)
+        )
 
     def _fetch_transcript(self, video_id: str) -> str | None:
         """Fetch transcript text for a YouTube video ID, with IP rotation.
@@ -399,6 +439,8 @@ class YouTubeIngestor:
             from youtube_transcript_api import YouTubeTranscriptApi  # noqa: F401
         except ImportError as exc:
             logger.error("youtube_transcript_api not installed: %s", exc)
+            self._last_fetch_status = "failed"
+            self._last_fetch_reason = "youtube_transcript_api not installed"
             return None
 
         # Library-level "give up, this video has no transcript" errors.
@@ -438,6 +480,8 @@ class YouTubeIngestor:
                         "Transcript for %s succeeded on attempt %d/%d",
                         video_id, attempt, max_attempts,
                     )
+                self._last_fetch_status = "ok"
+                self._last_fetch_reason = ""
                 return " ".join(entry["text"] for entry in raw)
 
             except retryable_block as exc:
@@ -461,6 +505,8 @@ class YouTubeIngestor:
                     "Transcript for %s unavailable (%s) — not retrying",
                     video_id, type(exc).__name__,
                 )
+                self._last_fetch_status = "unavailable"
+                self._last_fetch_reason = f"no transcript: {type(exc).__name__}"
                 return None
             except Exception as exc:  # noqa: BLE001 - unknown; retry defensively
                 last_exc = exc
@@ -480,9 +526,24 @@ class YouTubeIngestor:
             "Failed to fetch transcript for %s after %d attempts: %s",
             video_id, max_attempts, last_exc,
         )
+        if isinstance(last_exc, retryable_block):
+            category = "blocked"
+        elif isinstance(last_exc, retryable_transport):
+            category = "transport error"
+        else:
+            category = "error"
+        self._last_fetch_status = "failed"
+        self._last_fetch_reason = (
+            f"{category} after {max_attempts} attempts: "
+            f"{type(last_exc).__name__ if last_exc else 'unknown'}"
+        )
         return None
 
-    def load_raw(self, video_ids: list[str] | None = None) -> list[RawDocument]:
+    def load_raw(
+        self,
+        video_ids: list[str] | None = None,
+        deadline: float | None = None,
+    ) -> list[RawDocument]:
         if video_ids is None:
             if not self.ids_file.exists():
                 logger.warning("Video IDs file not found: %s", self.ids_file)
@@ -493,8 +554,26 @@ class YouTubeIngestor:
         docs: list[RawDocument] = []
         self._last_skipped = 0
         self._last_video_count = len(video_ids)
+        self._hit_deadline = False
+        self._last_attempted = 0
+        self._last_outcomes = []  # per-video {video_id, status, reason}
         backoff_s = 0.0  # grows on consecutive failures, resets on success
         for idx, vid_id in enumerate(video_ids):
+            # Stop before starting another video once the runtime deadline is
+            # reached. The fetch loop runs inside an uncancellable worker thread,
+            # so the ingestor must police its own clock — otherwise arq's
+            # job_timeout cancels the coroutine while this thread keeps fetching
+            # forever (the exact failure that pinned a job at 'running' for 24h+).
+            # Whatever was fetched so far is still processed and persisted below.
+            if deadline is not None and time.monotonic() >= deadline:
+                self._hit_deadline = True
+                logger.warning(
+                    "YouTube ingest hit runtime deadline after %d/%d videos — "
+                    "stopping early with partial results.",
+                    idx, len(video_ids),
+                )
+                break
+            self._last_attempted = idx + 1
             # Throttle between requests to avoid the burst pattern that trips
             # YouTube's rate limiter. Skip the wait before the first video so
             # single-video ingests aren't penalised.
@@ -502,16 +581,28 @@ class YouTubeIngestor:
                 self._throttle_sleep(extra=backoff_s)
 
             transcript = self._fetch_transcript(vid_id)
+            fetch_status = getattr(self, "_last_fetch_status", "failed")
+            fetch_reason = getattr(self, "_last_fetch_reason", "")
             if not transcript:
+                # 'unavailable' means the video simply has no captions — an
+                # expected outcome, not a failure. Anything else (blocked /
+                # transport / unexpected) is a real failure worth surfacing.
+                outcome = "skipped" if fetch_status == "unavailable" else "failed"
+                self._last_outcomes.append(
+                    {"video_id": vid_id, "status": outcome, "reason": fetch_reason}
+                )
                 self._last_skipped += 1
                 # A failure is the strongest signal we're being throttled, so
                 # back off exponentially (capped) before the next attempt.
                 backoff_s = min((backoff_s * 2) or 5.0, 60.0)
                 logger.warning(
-                    "No transcript for video %s — skipping (backoff now %.1fs)",
-                    vid_id, backoff_s,
+                    "No transcript for video %s (%s) — %s (backoff now %.1fs)",
+                    vid_id, fetch_reason or "unknown", outcome, backoff_s,
                 )
                 continue
+            self._last_outcomes.append(
+                {"video_id": vid_id, "status": "ingested", "reason": ""}
+            )
             backoff_s = 0.0  # recovered; drop back to base throttle
             url = f"{YOUTUBE_BASE_URL}{vid_id}"
             prov = dict(self._discovery_provenance.get(vid_id, {}))
@@ -566,6 +657,9 @@ class YouTubeIngestor:
                     save_normalized(record, self.output_dir)
                     records.append(record)
                     result.count += 1
+                result.per_source[doc.source_url] = (
+                    result.per_source.get(doc.source_url, 0) + len(chunks)
+                )
             except Exception as exc:
                 logger.error("Error processing %s: %s", doc.source_name, exc)
                 result.errors.append(str(exc))
@@ -592,7 +686,19 @@ class YouTubeIngestor:
         Returns:
             IngestionResult summarising the run.
         """
+        import os
+
         start = time.time()
+        # Bound total runtime so the job stops *itself* well before arq's
+        # job_timeout (default 3600s) would cancel the coroutine — leaving the
+        # background thread running. Default: arq timeout minus a 10-min margin
+        # to chunk+persist what was fetched. Override with
+        # YT_INGEST_MAX_RUNTIME_SECONDS (must stay < ARQ_JOB_TIMEOUT).
+        budget = int(os.environ.get("YT_INGEST_MAX_RUNTIME_SECONDS", "0"))
+        if budget <= 0:
+            budget = max(600, int(os.environ.get("ARQ_JOB_TIMEOUT", "3600")) - 600)
+        deadline = time.monotonic() + budget
+
         video_ids = self.discover_channel_videos(channel_name_or_url, topic=topic)
         if not video_ids:
             result = IngestionResult(source_type=SOURCE_TYPE)
@@ -605,13 +711,25 @@ class YouTubeIngestor:
             logger.warning("%s (autonomous channel=%s)", result, channel_name_or_url)
             return result
 
-        docs = self.load_raw(video_ids=video_ids)
+        docs = self.load_raw(video_ids=video_ids, deadline=deadline)
         result = self.process(docs)
         result.skipped = getattr(self, "_last_skipped", 0)
 
         # A run that discovered videos but ingested zero chunks is a failure,
         # not a clean completion — surface it instead of reporting success.
         discovered = getattr(self, "_last_video_count", len(video_ids))
+
+        # A deadline-truncated run is a partial, not a clean completion. Recording
+        # an error flips IngestionResult.success → False (→ orchestrator status
+        # 'failed'), while the chunks fetched before the cutoff are still saved.
+        if getattr(self, "_hit_deadline", False):
+            attempted = getattr(self, "_last_attempted", 0)
+            result.errors.append(
+                f"Ingest stopped at the {budget}s runtime deadline after "
+                f"{attempted}/{discovered} videos ({result.count} chunks saved). "
+                "Re-run to ingest the remainder."
+            )
+
         if result.count == 0:
             result.errors.append(
                 f"Discovered {discovered} video(s) but ingested 0 chunks: "
@@ -624,6 +742,46 @@ class YouTubeIngestor:
         logger.info(
             "%s (autonomous channel=%s, discovered=%d, skipped=%d)",
             result, channel_name_or_url, discovered, result.skipped,
+        )
+        return result
+
+    def run_batch(
+        self,
+        video_ids: list[str],
+        topic: str = "",
+        deadline: float | None = None,
+    ) -> IngestionResult:
+        """Fetch + ingest a specific set of video IDs (no channel discovery).
+
+        Used by the batched ingest path: a planner discovers all of a channel's
+        IDs once, then fans them out in fixed-size batches into this method. The
+        per-video outcomes from the fetch loop are left on
+        ``self._last_outcomes`` for the caller to persist, and
+        ``result.per_source`` carries chunk counts keyed by video URL so each
+        outcome can be annotated with its chunk total.
+        """
+        import os
+
+        start = time.time()
+        if deadline is None:
+            budget = int(os.environ.get("YT_INGEST_MAX_RUNTIME_SECONDS", "0"))
+            if budget <= 0:
+                budget = max(600, int(os.environ.get("ARQ_JOB_TIMEOUT", "3600")) - 600)
+            deadline = time.monotonic() + budget
+
+        docs = self.load_raw(video_ids=video_ids, deadline=deadline)
+        result = self.process(docs)
+        result.skipped = getattr(self, "_last_skipped", 0)
+        if getattr(self, "_hit_deadline", False):
+            attempted = getattr(self, "_last_attempted", 0)
+            result.errors.append(
+                f"Batch stopped at the runtime deadline after {attempted}/"
+                f"{len(video_ids)} videos ({result.count} chunks saved)."
+            )
+        result.duration_seconds = time.time() - start
+        logger.info(
+            "%s (batch of %d videos, ingested=%d chunks, skipped=%d)",
+            result, len(video_ids), result.count, result.skipped,
         )
         return result
 
