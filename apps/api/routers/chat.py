@@ -34,6 +34,17 @@ _safety_engine = SafetyRuleEngine()
 _citation_service = CitationService()
 _grounding_service = GroundingService()
 
+# How many candidate chunks to fetch from the vector store relative to the
+# LLM context window size. Larger pool → ranking_service.rank() sees more
+# candidates and tier-weighting can float high-tier chunks (e.g. PubMed
+# abstracts) into the LLM context even when their raw cosine similarity is
+# beaten by lower-tier chunks (e.g. YouTube transcripts using clinical
+# vocabulary). This is a *mitigation* for register mismatch in the lexical
+# LocalDeterministicEmbeddingFunction; the real fix is a semantic embedder.
+# Tunable: raise toward 10–15 if PubMed still doesn't surface for plain-
+# language queries; if even 15 doesn't help, the embedder must change.
+RETRIEVAL_POOL_MULTIPLIER: int = 6
+
 
 def _get_retrieval_service(settings: Settings) -> RetrievalService:
     """Return a cached RetrievalService instance."""
@@ -173,25 +184,42 @@ async def chat(
         settings,
     )
 
-    # 1. Retrieve chunks
+    # 1. Retrieve a wide candidate pool, then let the tier-aware ranker
+    # truncate it down to the LLM context window. Decoupling retrieval-K from
+    # context-K is critical: with a purely-lexical embedding function, low-
+    # similarity-but-high-tier chunks (PubMed abstracts for plain-language
+    # queries) never enter the candidate pool unless we ask for more than we
+    # need. See RETRIEVAL_POOL_MULTIPLIER comment above.
     retrieval_svc = _get_retrieval_service(settings)
-    chunks = retrieval_svc.retrieve(
+    candidate_pool_size = request_body.context_window_size * RETRIEVAL_POOL_MULTIPLIER
+    candidate_chunks = retrieval_svc.retrieve(
         query=request_body.query,
-        top_k=request_body.context_window_size,
+        top_k=candidate_pool_size,
     )
 
-    # 2. Rank chunks
-    ranked = _ranking_service.rank(chunks=chunks, query=request_body.query)
+    # 2. Rank the candidate pool by evidence_tier × relevance × recency, then
+    # truncate to the LLM context window. Downstream (safety, citations,
+    # composer, grounding) all consume the truncated, ranked set so the
+    # context that the safety engine evaluates matches what the LLM sees.
+    ranked = _ranking_service.rank(chunks=candidate_chunks, query=request_body.query)
+    ranked = ranked[: request_body.context_window_size]
+    ranked_chunks = [chunk for chunk, _ in ranked]
+    logger.info(
+        "Retrieval: pool=%d (k=%d × %d) → ranked top %d for context",
+        len(candidate_chunks),
+        request_body.context_window_size,
+        RETRIEVAL_POOL_MULTIPLIER,
+        len(ranked_chunks),
+    )
 
     # 3. Safety evaluation
     flags = _safety_engine.evaluate(
         query=request_body.query,
         patient_case=None,  # TODO: accept PatientCase in request body
-        chunks=chunks,
+        chunks=ranked_chunks,
     )
 
     # 4. Attach citations
-    ranked_chunks = [chunk for chunk, _ in ranked]
     annotated_answer_placeholder = " ".join(
         f"[{i+1}]" for i in range(len(ranked_chunks))
     )
