@@ -34,6 +34,17 @@ _safety_engine = SafetyRuleEngine()
 _citation_service = CitationService()
 _grounding_service = GroundingService()
 
+# How many candidate chunks to fetch from the vector store relative to the
+# LLM context window size. Larger pool → ranking_service.rank() sees more
+# candidates and tier-weighting can float high-tier chunks (e.g. PubMed
+# abstracts) into the LLM context even when their raw cosine similarity is
+# beaten by lower-tier chunks (e.g. YouTube transcripts using clinical
+# vocabulary). This is a *mitigation* for register mismatch in the lexical
+# LocalDeterministicEmbeddingFunction; the real fix is a semantic embedder.
+# Tunable: raise toward 10–15 if PubMed still doesn't surface for plain-
+# language queries; if even 15 doesn't help, the embedder must change.
+RETRIEVAL_POOL_MULTIPLIER: int = 6
+
 
 def _get_retrieval_service(settings: Settings) -> RetrievalService:
     """Return a cached RetrievalService instance."""
@@ -173,34 +184,46 @@ async def chat(
         settings,
     )
 
-    # 1. Retrieve chunks
+    # 1. Retrieve a wide candidate pool, then let the tier-aware ranker
+    # truncate it down to the LLM context window. Decoupling retrieval-K from
+    # context-K is critical: with a purely-lexical embedding function, low-
+    # similarity-but-high-tier chunks (PubMed abstracts for plain-language
+    # queries) never enter the candidate pool unless we ask for more than we
+    # need. See RETRIEVAL_POOL_MULTIPLIER comment above.
     retrieval_svc = _get_retrieval_service(settings)
-    chunks = retrieval_svc.retrieve(
+    candidate_pool_size = request_body.context_window_size * RETRIEVAL_POOL_MULTIPLIER
+    candidate_chunks = retrieval_svc.retrieve(
         query=request_body.query,
-        top_k=request_body.context_window_size,
+        top_k=candidate_pool_size,
     )
 
-    # 2. Rank chunks
-    ranked = _ranking_service.rank(chunks=chunks, query=request_body.query)
+    # 2. Rank the candidate pool by evidence_tier × relevance × recency, then
+    # truncate to the LLM context window. Downstream (safety, citations,
+    # composer, grounding) all consume the truncated, ranked set so the
+    # context that the safety engine evaluates matches what the LLM sees.
+    ranked = _ranking_service.rank(chunks=candidate_chunks, query=request_body.query)
+    ranked = ranked[: request_body.context_window_size]
+    ranked_chunks = [chunk for chunk, _ in ranked]
+    logger.info(
+        "Retrieval: pool=%d (k=%d × %d) → ranked top %d for context",
+        len(candidate_chunks),
+        request_body.context_window_size,
+        RETRIEVAL_POOL_MULTIPLIER,
+        len(ranked_chunks),
+    )
 
     # 3. Safety evaluation
     flags = _safety_engine.evaluate(
         query=request_body.query,
         patient_case=None,  # TODO: accept PatientCase in request body
-        chunks=chunks,
-    )
-
-    # 4. Attach citations
-    ranked_chunks = [chunk for chunk, _ in ranked]
-    annotated_answer_placeholder = " ".join(
-        f"[{i+1}]" for i in range(len(ranked_chunks))
-    )
-    annotated_answer, citations = _citation_service.attach_citations(
         chunks=ranked_chunks,
-        answer_text=annotated_answer_placeholder,
     )
 
-    # 5. Compose answer
+    # 4. Compose answer first. The LLM is prompted (see prompts/generation/
+    # clinician_answer.txt) to cite sources by [N] inline. We need the real
+    # answer text BEFORE we can validate citations against it. Pass an empty
+    # citation list here — composer doesn't use it for LLM input, only as a
+    # pass-through to the response, which we overwrite in the next step.
     composer = AnswerComposer(
         model=settings.llm_model,
         temperature=settings.llm_temperature,
@@ -210,17 +233,31 @@ async def chat(
     response = composer.compose(
         query=request_body.query,
         ranked_chunks=ranked,
-        citations=citations,
+        citations=[],
         safety_flags=flags,
         patient_case=None,
         request_id=request_id,
     )
 
+    # 5. Attach citations against the actual LLM output. This is the key
+    # correctness fix: _validate_citation_integrity now runs on real LLM text
+    # and will warn when the LLM hallucinates a marker like [6] for a source
+    # that was never retrieved. The returned annotated_answer (LLM text +
+    # Sources block) is intentionally NOT used to overwrite response.answer
+    # because the clinician UI renders citations from response.citations
+    # separately — appending a Sources block would duplicate that panel.
+    _, citations = _citation_service.attach_citations(
+        chunks=ranked_chunks,
+        answer_text=response.answer,
+    )
+    response.citations = citations
+
     response.latency_ms = int(time.time() * 1000) - start_ms
 
     # 5b. Grounding check — verify the composed answer's claims are supported
-    # by the retrieved evidence. Runs AFTER composition (on the real answer,
-    # not the citation placeholder) and surfaces a SafetyFlag if not.
+    # by the retrieved evidence. Independent of the citation integrity check
+    # in step 5: that one looks for orphan [N] markers; this one scores
+    # sentence-level claims against retrieved chunks.
     grounding_report = _grounding_service.check(
         answer_text=response.answer,
         chunks=ranked_chunks,
