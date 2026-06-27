@@ -219,16 +219,11 @@ async def chat(
         chunks=ranked_chunks,
     )
 
-    # 4. Attach citations
-    annotated_answer_placeholder = " ".join(
-        f"[{i+1}]" for i in range(len(ranked_chunks))
-    )
-    annotated_answer, citations = _citation_service.attach_citations(
-        chunks=ranked_chunks,
-        answer_text=annotated_answer_placeholder,
-    )
-
-    # 5. Compose answer
+    # 4. Compose answer first. The LLM is prompted (see prompts/generation/
+    # clinician_answer.txt) to cite sources by [N] inline. We need the real
+    # answer text BEFORE we can validate citations against it. Pass an empty
+    # citation list here — composer doesn't use it for LLM input, only as a
+    # pass-through to the response, which we overwrite in the next step.
     composer = AnswerComposer(
         model=settings.llm_model,
         temperature=settings.llm_temperature,
@@ -238,17 +233,31 @@ async def chat(
     response = composer.compose(
         query=request_body.query,
         ranked_chunks=ranked,
-        citations=citations,
+        citations=[],
         safety_flags=flags,
         patient_case=None,
         request_id=request_id,
     )
 
+    # 5. Attach citations against the actual LLM output. This is the key
+    # correctness fix: _validate_citation_integrity now runs on real LLM text
+    # and will warn when the LLM hallucinates a marker like [6] for a source
+    # that was never retrieved. The returned annotated_answer (LLM text +
+    # Sources block) is intentionally NOT used to overwrite response.answer
+    # because the clinician UI renders citations from response.citations
+    # separately — appending a Sources block would duplicate that panel.
+    _, citations = _citation_service.attach_citations(
+        chunks=ranked_chunks,
+        answer_text=response.answer,
+    )
+    response.citations = citations
+
     response.latency_ms = int(time.time() * 1000) - start_ms
 
     # 5b. Grounding check — verify the composed answer's claims are supported
-    # by the retrieved evidence. Runs AFTER composition (on the real answer,
-    # not the citation placeholder) and surfaces a SafetyFlag if not.
+    # by the retrieved evidence. Independent of the citation integrity check
+    # in step 5: that one looks for orphan [N] markers; this one scores
+    # sentence-level claims against retrieved chunks.
     grounding_report = _grounding_service.check(
         answer_text=response.answer,
         chunks=ranked_chunks,
